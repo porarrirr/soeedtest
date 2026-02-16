@@ -41,6 +41,14 @@ jobs:
             for ipa in build/ios/ipa/*.ipa; do
               cp "$ipa" "build/release-assets/ios-$(basename "${ipa%.ipa}")-${{ github.run_id }}.ipa"
             done
+          elif [ -d build/ios/iphoneos/Runner.app ]; then
+            rm -rf build/release-ipa-temp
+            mkdir -p build/release-ipa-temp/Payload
+            cp -R build/ios/iphoneos/Runner.app build/release-ipa-temp/Payload/
+            (
+              cd build/release-ipa-temp
+              zip -qry "../release-assets/ios-unsigned-runner-${{ github.run_id }}.ipa" Payload
+            )
           fi
 
           if ls build/ios/archive/*.xcarchive >/dev/null 2>&1; then
