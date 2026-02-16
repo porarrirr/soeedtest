@@ -45,7 +45,7 @@ iOS / Android 対応の回線速度測定アプリです。
 - 任意: `OOKLA_CLI_X86_TGZ_URL`
 - iOS では Speedtest CLI は未対応です。
 - `android/app/src/main/cli-binaries/<abi>/speedtest` にバイナリを置くと、Androidビルド時に自動で `assets/cli` と `jniLibs` へコピーされ、APKへ同封されます。
-- Android実行時は `nativeLibraryDir/libspeedtest.so` を優先実行します（`filesDir` 実行拒否端末対策）。
+- Android実行時は `nativeLibraryDir/libspeedtest.so` のみを実行し、実行不可時は明示的にエラーを返します。
 - `arm64-v8a` バイナリがない場合、Androidビルドは失敗します（開発時のみ `SPEEDTEST_ALLOW_MISSING_CLI=true` で回避可能）。
 
 ## Local Commands

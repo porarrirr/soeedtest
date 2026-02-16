@@ -61,6 +61,10 @@ jobs:
             --dart-define=SPEEDTEST_CLOUDFLARE_URL="${SPEEDTEST_CLOUDFLARE_URL}" \
             --dart-define=SPEEDTEST_CLI_PROVIDER_ORDER="${SPEEDTEST_CLI_PROVIDER_ORDER}"
 
+      - name: Verify CLI native library is packaged
+        run: |
+          unzip -l build/app/outputs/flutter-apk/app-debug.apk | grep "lib/arm64-v8a/libspeedtest.so"
+
       - name: Prepare release asset
         run: |
           mkdir -p build/release-assets

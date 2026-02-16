@@ -472,9 +472,9 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
     if (error is PlatformException) {
       switch (error.code) {
         case "binary_missing":
-          return "CLIバイナリが見つかりません。ビルド設定を確認してください。";
+          return "CLIバイナリが見つかりません。アプリを再ビルドして同梱設定を確認してください。";
         case "binary_not_executable":
-          return "CLIバイナリを実行できません。端末互換性または権限を確認してください。";
+          return "CLIバイナリを実行できません。ネイティブ同梱設定と端末互換性を確認してください。";
         case "cli_timeout":
           return "CLI測定がタイムアウトしました。通信環境を確認して再試行してください。";
         case "cli_failed":

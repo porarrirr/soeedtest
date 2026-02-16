@@ -18,7 +18,6 @@ import net.measurementlab.ndt7.android.utils.DataConverter
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -290,15 +289,16 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                         parsed.serverInfo,
                     )
                 } catch (error: CliBinaryMissingException) {
+                    val details = (error.details ?: emptyMap()) + mapOf(
+                        "providerOrder" to providerOrder,
+                        "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                        "sdkInt" to Build.VERSION.SDK_INT,
+                    )
                     completeError(
                         methodResult,
                         error.message ?: "CLI binary missing",
                         "binary_missing",
-                        mapOf(
-                            "providerOrder" to providerOrder,
-                            "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
-                            "sdkInt" to Build.VERSION.SDK_INT,
-                        ),
+                        details,
                     )
                 } catch (error: CliExecutionException) {
                     completeError(
@@ -402,50 +402,38 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             }
 
             val nativeBinary = nativeLibraryBinary()
-            if (nativeBinary != null) {
-                return CliCommand(
-                    listOf(
-                        nativeBinary.absolutePath,
-                        "--accept-license",
-                        "--accept-gdpr",
-                        "--format=json",
-                        "--progress=no",
-                    ),
-                )
-            }
-
-            val supportedAbis = Build.SUPPORTED_ABIS?.toList() ?: emptyList()
-            for (abi in supportedAbis) {
-                val assetPath = when (abi) {
-                    "arm64-v8a" -> "cli/arm64-v8a/speedtest"
-                    "armeabi-v7a" -> "cli/armeabi-v7a/speedtest"
-                    "x86_64" -> "cli/x86_64/speedtest"
-                    "x86" -> "cli/x86/speedtest"
-                    else -> null
-                } ?: continue
-                val embedded = prepareEmbeddedBinary(assetPath, abi)
-                if (embedded != null) {
-                    return CliCommand(
-                        listOf(
-                            embedded.absolutePath,
-                            "--accept-license",
-                            "--accept-gdpr",
-                            "--format=json",
-                            "--progress=no",
-                        ),
-                    )
-                }
-            }
-            throw CliBinaryMissingException(
-                "CLI binary not bundled for supported ABIs: ${supportedAbis.joinToString(", ")}",
+            return CliCommand(
+                listOf(
+                    nativeBinary.absolutePath,
+                    "--accept-license",
+                    "--accept-gdpr",
+                    "--format=json",
+                    "--progress=no",
+                ),
             )
         }
 
-        private fun nativeLibraryBinary(): File? {
-            val nativeLibDirPath = applicationInfo.nativeLibraryDir ?: return null
+        private fun nativeLibraryBinary(): File {
+            val nativeLibDirPath = applicationInfo.nativeLibraryDir
+                ?: throw CliBinaryMissingException(
+                    "Native library directory is unavailable",
+                    mapOf(
+                        "nativeLibraryDir" to null,
+                        "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                        "note" to "Android package must expose JNI libs at runtime.",
+                    ),
+                )
             val candidate = File(nativeLibDirPath, "libspeedtest.so")
             if (!candidate.exists()) {
-                return null
+                throw CliBinaryMissingException(
+                    "Bundled native CLI binary is missing",
+                    mapOf(
+                        "path" to candidate.absolutePath,
+                        "nativeLibraryDir" to nativeLibDirPath,
+                        "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                        "note" to "Ensure libspeedtest.so is packaged and native libs are extracted.",
+                    ),
+                )
             }
             candidate.setExecutable(true, false)
             if (!candidate.canExecute()) {
@@ -456,38 +444,11 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                         "path" to candidate.absolutePath,
                         "nativeLibraryDir" to nativeLibDirPath,
                         "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                        "note" to "Execution from app filesDir is disabled; package executable JNI libs.",
                     ),
                 )
             }
             return candidate
-        }
-
-        private fun prepareEmbeddedBinary(assetPath: String, abi: String): File? {
-            val outputDir = File(filesDir, "cli/$abi").apply { mkdirs() }
-            val outputFile = File(outputDir, "speedtest")
-            val input = try {
-                assets.open(assetPath)
-            } catch (_: Exception) {
-                return null
-            }
-            input.use { stream ->
-                FileOutputStream(outputFile).use { output ->
-                    stream.copyTo(output)
-                }
-            }
-            outputFile.setExecutable(true, true)
-            if (!outputFile.canExecute()) {
-                throw CliExecutionException(
-                    "binary_not_executable",
-                    "Extracted CLI binary cannot be executed ($abi)",
-                    mapOf(
-                        "path" to outputFile.absolutePath,
-                        "assetPath" to assetPath,
-                        "note" to "Device policy may block execution from app filesDir",
-                    ),
-                )
-            }
-            return outputFile
         }
 
         private fun parseOoklaResult(raw: String): CliParsedResult {
@@ -551,7 +512,10 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
-    private class CliBinaryMissingException(message: String) : RuntimeException(message)
+    private class CliBinaryMissingException(
+        message: String,
+        val details: Map<String, Any?>? = null,
+    ) : RuntimeException(message)
     private class CliExecutionException(
         val code: String,
         message: String,
