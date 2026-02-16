@@ -7,6 +7,9 @@ on:
       - main
       - master
 
+permissions:
+  contents: write
+
 jobs:
   build-ios:
     runs-on: macos-latest
@@ -30,6 +33,26 @@ jobs:
       - name: Build iOS IPA without code signing
         run: flutter build ipa --release --no-codesign
 
+      - name: Prepare release assets
+        run: |
+          mkdir -p build/release-assets
+
+          if ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+            for ipa in build/ios/ipa/*.ipa; do
+              cp "$ipa" "build/release-assets/ios-$(basename "${ipa%.ipa}")-${{ github.run_id }}.ipa"
+            done
+          fi
+
+          if ls build/ios/archive/*.xcarchive >/dev/null 2>&1; then
+            for archive in build/ios/archive/*.xcarchive; do
+              ditto -c -k --sequesterRsrc --keepParent "$archive" "build/release-assets/ios-$(basename "$archive")-${{ github.run_id }}.zip"
+            done
+          fi
+
+          if [ -d build/ios/iphoneos/Runner.app ]; then
+            ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app "build/release-assets/ios-Runner.app-${{ github.run_id }}.zip"
+          fi
+
       - name: Upload iOS artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -39,3 +62,13 @@ jobs:
             build/ios/ipa/*.ipa
             build/ios/archive/*.xcarchive
             build/ios/iphoneos/Runner.app
+
+      - name: Publish iOS artifacts to GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: build-${{ github.sha }}
+          name: Build ${{ github.sha }}
+          body: Automated build artifacts for commit ${{ github.sha }}
+          prerelease: true
+          allowUpdates: true
+          artifacts: build/release-assets/*
