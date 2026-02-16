@@ -3,6 +3,7 @@ import "dart:async";
 import "package:connectivity_plus/connectivity_plus.dart";
 import "package:dio/dio.dart";
 import "package:flutter/foundation.dart";
+import "package:flutter/services.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 import "package:hive/hive.dart";
 import "package:uuid/uuid.dart";
@@ -342,6 +343,24 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
   final Ref ref;
   bool _cancelRequested = false;
 
+  String _mapNativeError(Object error) {
+    if (error is PlatformException) {
+      switch (error.code) {
+        case "binary_missing":
+          return "CLIバイナリが見つかりません。ビルド設定を確認してください。";
+        case "binary_not_executable":
+          return "CLIバイナリを実行できません。端末互換性または権限を確認してください。";
+        case "cli_timeout":
+          return "CLI測定がタイムアウトしました。通信環境を確認して再試行してください。";
+        case "cli_failed":
+          return "CLI測定が失敗しました。詳細: ${error.message}";
+        case "json_parse_failed":
+          return "CLI結果の解析に失敗しました。詳細: ${error.message}";
+      }
+    }
+    return "測定中にエラーが発生しました: $error";
+  }
+
   Future<ConnectionType?> _connectionOrNullIfOffline() async {
     final List<ConnectivityResult> results = await ref
         .read(connectivityProvider)
@@ -470,7 +489,7 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
-        errorMessage: "測定中にエラーが発生しました: $error",
+        errorMessage: _mapNativeError(error),
       );
     }
   }

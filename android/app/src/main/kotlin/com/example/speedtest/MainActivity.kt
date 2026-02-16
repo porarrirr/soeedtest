@@ -1,5 +1,6 @@
 package com.example.speedtest
 
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
@@ -116,12 +117,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             result.error("already_running", "A speed test is already running", null)
             return
         }
-        val providerOrder = call.argument<List<*>>("providerOrder")
-            ?.mapNotNull { it?.toString()?.trim()?.lowercase() }
-            ?.filter { it.isNotEmpty() }
-            ?: listOf("ookla", "python")
-
-        val test = RunningCliSpeedTest(providerOrder, result)
+        val test = RunningCliSpeedTest(result)
         runningTest = test
         test.start()
     }
@@ -151,9 +147,9 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
-    private fun completeError(result: MethodChannel.Result, message: String) {
+    private fun completeError(result: MethodChannel.Result, message: String, code: String = "native_test_error") {
         mainHandler.post {
-            result.error("native_test_error", message, null)
+            result.error(code, message, null)
             runningTest = null
         }
     }
@@ -255,7 +251,6 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
     }
 
     private inner class RunningCliSpeedTest(
-        private val providerOrder: List<String>,
         private val methodResult: MethodChannel.Result,
     ) : RunningTest {
         @Volatile
@@ -269,36 +264,27 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             launcher.submit {
                 try {
                     emitProgress("download", 0.0, 0.05)
-                    val commands = buildCliCommands(providerOrder)
-                    if (commands.isEmpty()) {
-                        completeError(methodResult, "No CLI providers configured")
+                    if (cancelled) {
+                        completeError(methodResult, "cancelled", "cancelled")
                         return@submit
                     }
-
-                    var lastError: String = "No CLI command succeeded"
-                    for ((index, command) in commands.withIndex()) {
-                        if (cancelled) {
-                            completeError(methodResult, "cancelled")
-                            return@submit
-                        }
-                        val progressBase = 0.15 + (index.toDouble() / commands.size.toDouble()) * 0.5
-                        emitProgress("download", 0.0, progressBase)
-                        try {
-                            val output = executeCliCommand(command.args)
-                            val parsed = parseCliResult(command.provider, output)
-                            emitProgress("upload", parsed.uploadMbps, 0.95)
-                            completeSuccess(
-                                methodResult,
-                                parsed.downloadMbps,
-                                parsed.uploadMbps,
-                                parsed.serverInfo,
-                            )
-                            return@submit
-                        } catch (error: Exception) {
-                            lastError = error.localizedMessage ?: "CLI execution failed"
-                        }
-                    }
-                    completeError(methodResult, lastError)
+                    val command = buildOoklaCommand()
+                    emitProgress("download", 0.0, 0.20)
+                    val output = executeCliCommand(command.args)
+                    val parsed = parseOoklaResult(output)
+                    emitProgress("upload", parsed.uploadMbps, 0.95)
+                    completeSuccess(
+                        methodResult,
+                        parsed.downloadMbps,
+                        parsed.uploadMbps,
+                        parsed.serverInfo,
+                    )
+                } catch (error: CliBinaryMissingException) {
+                    completeError(methodResult, error.message ?: "CLI binary missing", "binary_missing")
+                } catch (error: CliExecutionException) {
+                    completeError(methodResult, error.message ?: "CLI execution failed", error.code)
+                } catch (error: Exception) {
+                    completeError(methodResult, error.localizedMessage ?: "CLI execution failed")
                 } finally {
                     launcher.shutdownNow()
                 }
@@ -311,116 +297,116 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
 
         private fun executeCliCommand(args: List<String>): String {
-            val started = ProcessBuilder(args)
-                .redirectErrorStream(true)
-                .start()
+            val started = try {
+                ProcessBuilder(args)
+                    .redirectErrorStream(true)
+                    .start()
+            } catch (error: Exception) {
+                throw CliExecutionException("binary_not_executable", error.localizedMessage ?: "Failed to start CLI process")
+            }
             process = started
             val output = started.inputStream.bufferedReader().use { it.readText() }
             val finished = started.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             if (!finished) {
                 started.destroyForcibly()
-                throw RuntimeException("CLI timeout")
+                throw CliExecutionException("cli_timeout", "Speedtest CLI timed out")
             }
             if (started.exitValue() != 0) {
-                throw RuntimeException("CLI exited with ${started.exitValue()}: $output")
+                throw CliExecutionException(
+                    "cli_failed",
+                    "CLI exited with ${started.exitValue()}: ${summarizeOutput(output)}",
+                )
             }
             return output
         }
 
-        private fun buildCliCommands(order: List<String>): List<CliCommand> {
-            val commands = mutableListOf<CliCommand>()
-            for (provider in order) {
-                when (provider) {
-                    "ookla" -> {
-                        val embedded = prepareEmbeddedBinary("cli/speedtest", "speedtest")
-                        if (embedded != null) {
-                            commands += CliCommand(
-                                "ookla",
-                                listOf(
-                                    embedded.absolutePath,
-                                    "--accept-license",
-                                    "--accept-gdpr",
-                                    "--format=json",
-                                ),
-                            )
-                        }
-                        commands += CliCommand(
-                            "ookla",
-                            listOf(
-                                "speedtest",
-                                "--accept-license",
-                                "--accept-gdpr",
-                                "--format=json",
-                            ),
-                        )
-                    }
-
-                    "python" -> {
-                        val embedded = prepareEmbeddedBinary("cli/speedtest-cli", "speedtest-cli")
-                        if (embedded != null) {
-                            commands += CliCommand(
-                                "python",
-                                listOf(embedded.absolutePath, "--json"),
-                            )
-                        }
-                        commands += CliCommand("python", listOf("speedtest-cli", "--json"))
-                    }
+        private fun buildOoklaCommand(): CliCommand {
+            val supportedAbis = Build.SUPPORTED_ABIS?.toList() ?: emptyList()
+            for (abi in supportedAbis) {
+                val assetPath = when (abi) {
+                    "arm64-v8a" -> "cli/arm64-v8a/speedtest"
+                    "armeabi-v7a" -> "cli/armeabi-v7a/speedtest"
+                    else -> null
+                } ?: continue
+                val embedded = prepareEmbeddedBinary(assetPath, abi)
+                if (embedded != null) {
+                    return CliCommand(
+                        listOf(
+                            embedded.absolutePath,
+                            "--accept-license",
+                            "--accept-gdpr",
+                            "--format=json",
+                        ),
+                    )
                 }
             }
-            return commands
+            throw CliBinaryMissingException(
+                "CLI binary not bundled for supported ABIs: ${supportedAbis.joinToString(", ")}",
+            )
         }
 
-        private fun prepareEmbeddedBinary(assetPath: String, outputName: String): File? {
-            return try {
-                val outputDir = File(filesDir, "cli").apply { mkdirs() }
-                val outputFile = File(outputDir, outputName)
-                assets.open(assetPath).use { input ->
-                    FileOutputStream(outputFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                outputFile.setExecutable(true, true)
-                outputFile
+        private fun prepareEmbeddedBinary(assetPath: String, abi: String): File? {
+            val outputDir = File(filesDir, "cli/$abi").apply { mkdirs() }
+            val outputFile = File(outputDir, "speedtest")
+            val input = try {
+                assets.open(assetPath)
             } catch (_: Exception) {
-                null
+                return null
             }
+            input.use { stream ->
+                FileOutputStream(outputFile).use { output ->
+                    stream.copyTo(output)
+                }
+            }
+            outputFile.setExecutable(true, true)
+            if (!outputFile.canExecute()) {
+                throw CliExecutionException(
+                    "binary_not_executable",
+                    "Extracted CLI binary cannot be executed ($abi)",
+                )
+            }
+            return outputFile
         }
 
-        private fun parseCliResult(provider: String, raw: String): CliParsedResult {
-            val json = JSONObject(raw.trim())
-            return if (provider == "ookla") {
-                val downloadBandwidth = json.optJSONObject("download")?.optDouble("bandwidth", 0.0) ?: 0.0
-                val uploadBandwidth = json.optJSONObject("upload")?.optDouble("bandwidth", 0.0) ?: 0.0
-                val download = if (downloadBandwidth > 0) downloadBandwidth * 8 / 1_000_000 else json.optDouble("download", 0.0) / 1_000_000
-                val upload = if (uploadBandwidth > 0) uploadBandwidth * 8 / 1_000_000 else json.optDouble("upload", 0.0) / 1_000_000
-                if (download <= 0 && upload <= 0) {
-                    throw RuntimeException("Ookla CLI result parsing failed")
-                }
-                val server = json.optJSONObject("server")
-                val serverInfo = listOf(
-                    server?.optString("name"),
-                    server?.optString("location"),
-                    server?.optString("country"),
-                ).filterNotNull().filter { it.isNotBlank() }.joinToString(" / ").ifBlank { null }
-                CliParsedResult(download, upload, serverInfo)
-            } else {
-                val download = json.optDouble("download", 0.0) / 1_000_000
-                val upload = json.optDouble("upload", 0.0) / 1_000_000
-                if (download <= 0 && upload <= 0) {
-                    throw RuntimeException("speedtest-cli result parsing failed")
-                }
-                val server = json.optJSONObject("server")
-                val serverInfo = listOf(
-                    server?.optString("sponsor"),
-                    server?.optString("name"),
-                    server?.optString("country"),
-                ).filterNotNull().filter { it.isNotBlank() }.joinToString(" / ").ifBlank { null }
-                CliParsedResult(download, upload, serverInfo)
+        private fun parseOoklaResult(raw: String): CliParsedResult {
+            val json = try {
+                JSONObject(raw.trim())
+            } catch (_: Exception) {
+                throw CliExecutionException("json_parse_failed", "Failed to parse CLI JSON: ${summarizeOutput(raw)}")
             }
+            val downloadBandwidth = json.optJSONObject("download")?.optDouble("bandwidth", 0.0) ?: 0.0
+            val uploadBandwidth = json.optJSONObject("upload")?.optDouble("bandwidth", 0.0) ?: 0.0
+            val download = if (downloadBandwidth > 0) {
+                downloadBandwidth * 8 / 1_000_000
+            } else {
+                json.optDouble("download", 0.0) / 1_000_000
+            }
+            val upload = if (uploadBandwidth > 0) {
+                uploadBandwidth * 8 / 1_000_000
+            } else {
+                json.optDouble("upload", 0.0) / 1_000_000
+            }
+            if (download <= 0 && upload <= 0) {
+                throw CliExecutionException("json_parse_failed", "Ookla CLI result parsing failed: ${summarizeOutput(raw)}")
+            }
+            val server = json.optJSONObject("server")
+            val serverInfo = listOf(
+                server?.optString("name"),
+                server?.optString("location"),
+                server?.optString("country"),
+            ).filterNotNull().filter { it.isNotBlank() }.joinToString(" / ").ifBlank { null }
+            return CliParsedResult(download, upload, serverInfo)
+        }
+
+        private fun summarizeOutput(output: String): String {
+            val normalized = output.replace("\n", " ").replace("\r", " ").trim()
+            return if (normalized.length > 300) normalized.substring(0, 300) else normalized
         }
     }
 
-    private data class CliCommand(val provider: String, val args: List<String>)
+    private class CliBinaryMissingException(message: String) : RuntimeException(message)
+    private class CliExecutionException(val code: String, message: String) : RuntimeException(message)
+    private data class CliCommand(val args: List<String>)
     private data class CliParsedResult(val downloadMbps: Double, val uploadMbps: Double, val serverInfo: String?)
     private data class PhaseOutcome(val mbps: Double, val error: Throwable?)
 

@@ -23,7 +23,7 @@ iOS / Android 対応の回線速度測定アプリです。
 - Flutter ⇄ Native
   - `MethodChannel`: `speedtest`
   - `EventChannel`: `speedtest_progress`
-- Android: ndt7-client-android + CLI 実行（`ndt7` / `nperf` / `speedtestCli`）
+- Android: ndt7-client-android + Ookla CLI 実行（`ndt7` / `nperf` / `speedtestCli`）
 - iOS: `NDT7` (ndt7-client-ios) CocoaPods（`ndt7` / `nperf`）
 
 ## Runtime Config (`--dart-define`)
@@ -34,6 +34,13 @@ iOS / Android 対応の回線速度測定アプリです。
 - `SPEEDTEST_OPEN_SPEED_TEST_URL`
 - `SPEEDTEST_CLOUDFLARE_URL`（未指定時: `https://speed.cloudflare.com`）
 - `SPEEDTEST_CLI_PROVIDER_ORDER`（例: `ookla,python`）
+
+## Android CLI Binary Provisioning
+
+- `scripts/fetch_cli_binaries.sh` は Ookla CLI の Linux `.tgz` を展開し、`android/app/src/main/assets/cli/<abi>/speedtest` に配置します。
+- 必須: `OOKLA_CLI_AARCH64_TGZ_URL`
+- 任意: `OOKLA_CLI_ARMHF_TGZ_URL`
+- iOS では Speedtest CLI は未対応です。
 
 ## Local Commands
 

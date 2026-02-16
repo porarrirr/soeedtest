@@ -82,12 +82,15 @@ class RunSpeedTestUseCase {
           );
         case SpeedTestEngine.speedtestCli:
           {
+            final List<String> order = config.cliProviderOrder
+                .where((String item) => item == "ookla")
+                .toList();
             _progressSubscription = _cliSpeedtestChannel.progressStream.listen(
               onProgress,
             );
             _cancelCallback = _cliSpeedtestChannel.cancelTest;
             native = await _cliSpeedtestChannel.startTest(
-              providerOrder: config.cliProviderOrder,
+              providerOrder: order.isEmpty ? const <String>["ookla"] : order,
             );
             serverInfo = native.serverInfo;
             break;
