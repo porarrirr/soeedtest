@@ -1,0 +1,61 @@
+import "package:flutter/material.dart";
+import "package:flutter_riverpod/flutter_riverpod.dart";
+
+import "../../app/providers.dart";
+import "consent_screen.dart";
+
+class SettingsScreen extends ConsumerWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AsyncValue<ConsentSnapshot> consent = ref.watch(
+      consentControllerProvider,
+    );
+    final bool granted = consent.valueOrNull?.granted ?? false;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text("設定")),
+      body: ListView(
+        children: <Widget>[
+          ListTile(
+            title: const Text("同意状態"),
+            subtitle: Text(granted ? "同意済み" : "未同意"),
+          ),
+          ListTile(
+            title: const Text("同意画面を開く"),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const ConsentScreen()),
+              );
+            },
+          ),
+          ListTile(
+            title: const Text("同意を撤回する"),
+            subtitle: const Text("撤回後は測定を開始できません。"),
+            enabled: granted,
+            onTap: granted
+                ? () async {
+                    await ref.read(consentControllerProvider.notifier).revoke();
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text("同意を撤回しました。")));
+                  }
+                : null,
+          ),
+          const Divider(),
+          const ListTile(
+            title: Text("注意文・ポリシー"),
+            subtitle: Text(
+              "https://example.com/policy\nhttps://example.com/notice",
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
