@@ -36,12 +36,33 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p build/release-assets
+          ipa_created=false
 
           if ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
             for ipa in build/ios/ipa/*.ipa; do
               cp "$ipa" "build/release-assets/ios-$(basename "${ipa%.ipa}")-${{ github.run_id }}.ipa"
             done
-          elif [ -d build/ios/iphoneos/Runner.app ]; then
+            ipa_created=true
+          fi
+
+          if ls build/ios/archive/*.xcarchive >/dev/null 2>&1; then
+            for archive in build/ios/archive/*.xcarchive; do
+              ditto -c -k --sequesterRsrc --keepParent "$archive" "build/release-assets/ios-$(basename "$archive")-${{ github.run_id }}.zip"
+
+              if [ "$ipa_created" = false ] && [ -d "$archive/Products/Applications/Runner.app" ]; then
+                rm -rf build/release-ipa-temp
+                mkdir -p build/release-ipa-temp/Payload
+                cp -R "$archive/Products/Applications/Runner.app" build/release-ipa-temp/Payload/
+                (
+                  cd build/release-ipa-temp
+                  zip -qry "../release-assets/ios-unsigned-runner-${{ github.run_id }}.ipa" Payload
+                )
+                ipa_created=true
+              fi
+            done
+          fi
+
+          if [ "$ipa_created" = false ] && [ -d build/ios/iphoneos/Runner.app ]; then
             rm -rf build/release-ipa-temp
             mkdir -p build/release-ipa-temp/Payload
             cp -R build/ios/iphoneos/Runner.app build/release-ipa-temp/Payload/
@@ -49,12 +70,7 @@ jobs:
               cd build/release-ipa-temp
               zip -qry "../release-assets/ios-unsigned-runner-${{ github.run_id }}.ipa" Payload
             )
-          fi
-
-          if ls build/ios/archive/*.xcarchive >/dev/null 2>&1; then
-            for archive in build/ios/archive/*.xcarchive; do
-              ditto -c -k --sequesterRsrc --keepParent "$archive" "build/release-assets/ios-$(basename "$archive")-${{ github.run_id }}.zip"
-            done
+            ipa_created=true
           fi
 
           if [ -d build/ios/iphoneos/Runner.app ]; then
