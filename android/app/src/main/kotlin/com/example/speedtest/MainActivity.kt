@@ -66,8 +66,13 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
         val downloadUrl = call.argument<String>("downloadUrl")
         val uploadUrl = call.argument<String>("uploadUrl")
+        val engine = call.argument<String>("engine")
+        if (engine != "ndt7") {
+            result.error("unsupported_engine", "Selected engine is not implemented on native layer", null)
+            return
+        }
         if (downloadUrl.isNullOrBlank() || uploadUrl.isNullOrBlank()) {
-            result.error("invalid_args", "downloadUrl and uploadUrl are required", null)
+            result.error("invalid_args", "engine, downloadUrl and uploadUrl are required", null)
             return
         }
 

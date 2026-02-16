@@ -9,11 +9,14 @@ import "package:uuid/uuid.dart";
 import "../data/network/locate_api_client.dart";
 import "../data/repositories/consent_repository_impl.dart";
 import "../data/repositories/history_repository_impl.dart";
+import "../data/repositories/speed_test_engine_repository_impl.dart";
 import "../data/storage/hive_boxes.dart";
 import "../domain/models/connection_type.dart";
+import "../domain/models/speed_test_engine.dart";
 import "../domain/models/speed_test_result.dart";
 import "../domain/repositories/consent_repository.dart";
 import "../domain/repositories/history_repository.dart";
+import "../domain/repositories/speed_test_engine_repository.dart";
 import "../domain/usecases/run_speed_test_usecase.dart";
 import "../platform/speedtest_channel.dart";
 
@@ -66,6 +69,11 @@ final Provider<ConsentRepository> consentRepositoryProvider =
 final Provider<HistoryRepository> historyRepositoryProvider =
     Provider<HistoryRepository>((Ref ref) {
       return HistoryRepositoryImpl(ref.watch(historyBoxProvider));
+    });
+
+final Provider<SpeedTestEngineRepository> speedTestEngineRepositoryProvider =
+    Provider<SpeedTestEngineRepository>((Ref ref) {
+      return SpeedTestEngineRepositoryImpl(ref.watch(settingsBoxProvider));
     });
 
 class ConsentSnapshot {
@@ -151,6 +159,45 @@ historyControllerProvider =
         return HistoryController(ref.watch(historyRepositoryProvider));
       },
     );
+
+class SpeedTestEngineController
+    extends StateNotifier<AsyncValue<SpeedTestEngine>> {
+  SpeedTestEngineController(this._repository)
+    : super(const AsyncValue.loading()) {
+    unawaited(load());
+  }
+
+  final SpeedTestEngineRepository _repository;
+
+  Future<void> load() async {
+    state = const AsyncValue.loading();
+    try {
+      final SpeedTestEngine selected = await _repository.getSelectedEngine();
+      state = AsyncValue.data(selected);
+    } catch (error, stackTrace) {
+      state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  Future<void> setSelectedEngine(SpeedTestEngine engine) async {
+    await _repository.setSelectedEngine(engine);
+    state = AsyncValue.data(engine);
+  }
+}
+
+final StateNotifierProvider<
+  SpeedTestEngineController,
+  AsyncValue<SpeedTestEngine>
+>
+speedTestEngineControllerProvider =
+    StateNotifierProvider<
+      SpeedTestEngineController,
+      AsyncValue<SpeedTestEngine>
+    >((Ref ref) {
+      return SpeedTestEngineController(
+        ref.watch(speedTestEngineRepositoryProvider),
+      );
+    });
 
 final StateProvider<ConnectionType?> historyFilterProvider =
     StateProvider<ConnectionType?>((Ref ref) {
@@ -272,6 +319,17 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
       );
       return;
     }
+    final SpeedTestEngine selectedEngine =
+        ref.read(speedTestEngineControllerProvider).valueOrNull ??
+        SpeedTestEngine.ndt7;
+    if (!selectedEngine.isImplemented) {
+      state = state.copyWith(
+        phase: TestPhase.error,
+        running: false,
+        errorMessage: "${selectedEngine.label} は未対応です。設定で実装済みエンジンを選択してください。",
+      );
+      return;
+    }
 
     _cancelRequested = false;
     state = state.copyWith(
@@ -288,6 +346,7 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
           .read(runSpeedTestUseCaseProvider)
           .execute(
             connectionType: connection,
+            engine: selectedEngine,
             onProgress: (NativeSpeedtestProgress progress) {
               final TestPhase phase = progress.phase == "upload"
                   ? TestPhase.upload
@@ -315,6 +374,12 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
         phase: TestPhase.error,
         running: false,
         errorMessage: "測定先取得に失敗しました。リトライしてください。",
+      );
+    } on UnsupportedSpeedTestEngineException catch (error) {
+      state = state.copyWith(
+        phase: TestPhase.error,
+        running: false,
+        errorMessage: "${error.engine.label} は未対応です。設定で実装済みエンジンを選択してください。",
       );
     } catch (error) {
       if (_cancelRequested) {

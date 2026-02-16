@@ -2,6 +2,7 @@ import "package:flutter/material.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 
 import "../../app/providers.dart";
+import "../../domain/models/speed_test_engine.dart";
 import "consent_screen.dart";
 
 class SettingsScreen extends ConsumerWidget {
@@ -12,6 +13,11 @@ class SettingsScreen extends ConsumerWidget {
     final AsyncValue<ConsentSnapshot> consent = ref.watch(
       consentControllerProvider,
     );
+    final AsyncValue<SpeedTestEngine> selectedEngineAsync = ref.watch(
+      speedTestEngineControllerProvider,
+    );
+    final SpeedTestEngine selectedEngine =
+        selectedEngineAsync.valueOrNull ?? SpeedTestEngine.ndt7;
     final bool granted = consent.valueOrNull?.granted ?? false;
 
     return Scaffold(
@@ -47,6 +53,41 @@ class SettingsScreen extends ConsumerWidget {
                   }
                 : null,
           ),
+          const Divider(),
+          const ListTile(
+            title: Text("測定エンジン"),
+            subtitle: Text("速度測定で使用する基盤を選択します。"),
+          ),
+          for (final SpeedTestEngine engine in SpeedTestEngine.values)
+            ListTile(
+              title: Text(engine.label),
+              subtitle: Text(
+                engine.isImplemented
+                    ? engine.statusLabel
+                    : "${engine.statusLabel} (選択のみ)",
+              ),
+              trailing: Icon(
+                selectedEngine == engine
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+              ),
+              onTap: () async {
+                await ref
+                    .read(speedTestEngineControllerProvider.notifier)
+                    .setSelectedEngine(engine);
+                if (!context.mounted) {
+                  return;
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text("測定エンジンを ${engine.label} に変更しました。")),
+                );
+              },
+            ),
+          if (selectedEngineAsync.hasError)
+            const ListTile(
+              title: Text("測定エンジン設定の読み込みに失敗しました"),
+              subtitle: Text("デフォルト値で継続します。"),
+            ),
           const Divider(),
           const ListTile(
             title: Text("注意文・ポリシー"),

@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+## Cross-Platform Instruction Default
+- Unless the user explicitly scopes a request otherwise, interpret every prompt as applying to both iOS and Android.
+- If a task is truly platform-specific (e.g., signing, provisioning, platform-only APIs), call that out explicitly while still preserving cross-platform intent where possible.
+
 ## Project Structure & Module Organization
 - `lib/` contains application code, organized by layer:
   - `lib/ui/screens/` for Flutter screens.

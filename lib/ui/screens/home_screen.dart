@@ -6,6 +6,7 @@ import "package:intl/intl.dart";
 
 import "../../app/providers.dart";
 import "../../domain/models/connection_type.dart";
+import "../../domain/models/speed_test_engine.dart";
 import "../../domain/models/speed_test_result.dart";
 import "consent_screen.dart";
 import "history_screen.dart";
@@ -26,16 +27,21 @@ class HomeScreen extends ConsumerWidget {
     final AsyncValue<ConnectionType> connection = ref.watch(
       currentConnectionTypeProvider,
     );
+    final AsyncValue<SpeedTestEngine> selectedEngineAsync = ref.watch(
+      speedTestEngineControllerProvider,
+    );
     final SpeedTestState testState = ref.watch(speedTestControllerProvider);
 
     final bool granted = consent.valueOrNull?.granted ?? false;
+    final SpeedTestEngine selectedEngine =
+        selectedEngineAsync.valueOrNull ?? SpeedTestEngine.ndt7;
     final SpeedTestResult? latest = history.valueOrNull?.isNotEmpty == true
         ? history.valueOrNull!.first
         : null;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("NDT7 Speed Test"),
+        title: const Text("Speed Test"),
         actions: <Widget>[
           IconButton(
             onPressed: () {
@@ -77,6 +83,15 @@ class HomeScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 12),
+            Card(
+              child: ListTile(
+                title: const Text("測定エンジン"),
+                subtitle: Text(
+                  "${selectedEngine.label} (${selectedEngine.statusLabel})",
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             if (latest != null)
               Card(
                 child: ListTile(
@@ -84,9 +99,7 @@ class HomeScreen extends ConsumerWidget {
                     "直近: DL ${latest.downloadMbps.toStringAsFixed(1)} / UL ${latest.uploadMbps.toStringAsFixed(1)} Mbps",
                   ),
                   subtitle: Text(
-                    DateFormat(
-                      "yyyy-MM-dd HH:mm",
-                    ).format(latest.timestamp.toLocal()),
+                    "${DateFormat("yyyy-MM-dd HH:mm").format(latest.timestamp.toLocal())}  •  ${latest.engine.label}",
                   ),
                 ),
               )
@@ -103,11 +116,16 @@ class HomeScreen extends ConsumerWidget {
                 "同意未取得のため測定できません。",
                 style: TextStyle(color: Colors.red),
               ),
+            if (granted && !selectedEngine.isImplemented)
+              Text(
+                "${selectedEngine.label} は未対応です。設定から実装済みエンジンを選んでください。",
+                style: const TextStyle(color: Colors.red),
+              ),
             const SizedBox(height: 8),
             SizedBox(
               height: 52,
               child: FilledButton(
-                onPressed: testState.running
+                onPressed: testState.running || !selectedEngine.isImplemented
                     ? null
                     : () async {
                         if (!granted) {

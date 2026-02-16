@@ -4,6 +4,7 @@ import "package:intl/intl.dart";
 
 import "../../app/providers.dart";
 import "../../domain/models/connection_type.dart";
+import "../../domain/models/speed_test_engine.dart";
 import "../../domain/models/speed_test_result.dart";
 import "result_screen.dart";
 
@@ -65,7 +66,7 @@ class HistoryScreen extends ConsumerWidget {
                         "DL ${item.downloadMbps.toStringAsFixed(1)} / UL ${item.uploadMbps.toStringAsFixed(1)} Mbps",
                       ),
                       subtitle: Text(
-                        "${DateFormat("yyyy-MM-dd HH:mm").format(item.timestamp.toLocal())}  •  ${item.connectionType.label}",
+                        "${DateFormat("yyyy-MM-dd HH:mm").format(item.timestamp.toLocal())}  •  ${item.connectionType.label}  •  ${item.engine.label}",
                       ),
                       onTap: () {
                         Navigator.of(context).push(

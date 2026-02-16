@@ -1,7 +1,7 @@
-# NDT7 Speed Test (Flutter)
+# Speed Test (Flutter)
 
 iOS / Android 対応の回線速度測定アプリです。  
-測定基盤は M-Lab NDT7 を使用し、自前測定サーバーは不要です。
+設定画面から測定エンジンを選択できます（現状は M-Lab NDT7 が実装済み）。
 
 ## Features
 
@@ -11,6 +11,7 @@ iOS / Android 対応の回線速度測定アプリです。
 - ローカル履歴保存（Hive）
 - 履歴一覧・詳細・簡易フィルタ（Wi-Fi / Mobile）
 - 設定で同意撤回
+- 測定エンジン選択（NDT7 / nPerf / OpenSpeedTest / Cloudflare）
 - 結果テキスト共有
 
 ## Architecture
@@ -20,8 +21,8 @@ iOS / Android 対応の回線速度測定アプリです。
 - Flutter ⇄ Native
   - `MethodChannel`: `speedtest`
   - `EventChannel`: `speedtest_progress`
-- Android: ndt7-client-android の実装を組み込み
-- iOS: `NDT7` (ndt7-client-ios) CocoaPods
+- Android: ndt7-client-android の実装を組み込み（`ndt7`）
+- iOS: `NDT7` (ndt7-client-ios) CocoaPods（`ndt7`）
 
 ## Local Commands
 

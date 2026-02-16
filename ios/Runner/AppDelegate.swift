@@ -53,10 +53,15 @@ import UIKit
     }
     guard
       let map = arguments as? [String: Any],
+      let engine = map["engine"] as? String,
       let downloadUrl = map["downloadUrl"] as? String,
       let uploadUrl = map["uploadUrl"] as? String
     else {
-      result(FlutterError(code: "invalid_args", message: "downloadUrl and uploadUrl are required", details: nil))
+      result(FlutterError(code: "invalid_args", message: "engine, downloadUrl and uploadUrl are required", details: nil))
+      return
+    }
+    if engine != "ndt7" {
+      result(FlutterError(code: "unsupported_engine", message: "Selected engine is not implemented on native layer", details: nil))
       return
     }
 

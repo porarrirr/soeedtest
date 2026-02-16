@@ -42,11 +42,13 @@ class SpeedtestChannel {
   }
 
   Future<NativeSpeedtestResult> startTest({
+    required String engineName,
     required String downloadUrl,
     required String uploadUrl,
   }) async {
     final Map<dynamic, dynamic>? result = await _methodChannel
         .invokeMapMethod<dynamic, dynamic>("startTest", <String, dynamic>{
+          "engine": engineName,
           "downloadUrl": downloadUrl,
           "uploadUrl": uploadUrl,
         });

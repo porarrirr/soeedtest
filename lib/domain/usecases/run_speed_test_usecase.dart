@@ -5,9 +5,19 @@ import "package:uuid/uuid.dart";
 import "../../data/network/locate_api_client.dart";
 import "../../platform/speedtest_channel.dart";
 import "../models/connection_type.dart";
+import "../models/speed_test_engine.dart";
 import "../models/speed_test_result.dart";
 
 typedef ProgressCallback = void Function(NativeSpeedtestProgress progress);
+
+class UnsupportedSpeedTestEngineException implements Exception {
+  const UnsupportedSpeedTestEngineException(this.engine);
+
+  final SpeedTestEngine engine;
+
+  @override
+  String toString() => "UnsupportedSpeedTestEngineException: ${engine.name}";
+}
 
 class RunSpeedTestUseCase {
   RunSpeedTestUseCase({
@@ -26,13 +36,18 @@ class RunSpeedTestUseCase {
 
   Future<SpeedTestResult> execute({
     required ConnectionType connectionType,
+    required SpeedTestEngine engine,
     required ProgressCallback onProgress,
   }) async {
+    if (!engine.isImplemented) {
+      throw UnsupportedSpeedTestEngineException(engine);
+    }
     _progressSubscription?.cancel();
     _progressSubscription = _speedtestChannel.progressStream.listen(onProgress);
     try {
       final LocateApiResult locate = await _locateApiClient.nearest();
       final NativeSpeedtestResult native = await _speedtestChannel.startTest(
+        engineName: engine.storageValue,
         downloadUrl: locate.downloadUrl,
         uploadUrl: locate.uploadUrl,
       );
@@ -42,6 +57,7 @@ class RunSpeedTestUseCase {
         downloadMbps: native.downloadMbps,
         uploadMbps: native.uploadMbps,
         connectionType: connectionType,
+        engine: engine,
         serverInfo: native.serverInfo ?? locate.serverInfo,
       );
     } finally {

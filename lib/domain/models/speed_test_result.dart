@@ -1,6 +1,7 @@
 import "dart:convert";
 
 import "connection_type.dart";
+import "speed_test_engine.dart";
 
 class SpeedTestResult {
   const SpeedTestResult({
@@ -9,6 +10,7 @@ class SpeedTestResult {
     required this.downloadMbps,
     required this.uploadMbps,
     required this.connectionType,
+    this.engine = SpeedTestEngine.ndt7,
     this.serverInfo,
     this.error,
   });
@@ -18,6 +20,7 @@ class SpeedTestResult {
   final double downloadMbps;
   final double uploadMbps;
   final ConnectionType connectionType;
+  final SpeedTestEngine engine;
   final String? serverInfo;
   final String? error;
 
@@ -30,6 +33,7 @@ class SpeedTestResult {
       "downloadMbps": downloadMbps,
       "uploadMbps": uploadMbps,
       "connectionType": connectionType.name,
+      "engine": engine.storageValue,
       "serverInfo": serverInfo,
       "error": error,
     };
@@ -57,6 +61,7 @@ class SpeedTestResult {
         (ConnectionType value) => value.name == typeRaw,
         orElse: () => ConnectionType.unknown,
       ),
+      engine: SpeedTestEngineX.fromStorageValue(json["engine"] as String?),
       serverInfo: json["serverInfo"] as String?,
       error: json["error"] as String?,
     );
