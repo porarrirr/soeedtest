@@ -31,7 +31,26 @@ jobs:
           pod install
 
       - name: Build iOS IPA without code signing
-        run: flutter build ipa --release --no-codesign
+        env:
+          SPEEDTEST_NPERF_ANDROID_CONFIG: ${{ secrets.SPEEDTEST_NPERF_ANDROID_CONFIG }}
+          SPEEDTEST_NPERF_IOS_CONFIG: ${{ secrets.SPEEDTEST_NPERF_IOS_CONFIG }}
+          SPEEDTEST_NPERF_WEB_URL: ${{ secrets.SPEEDTEST_NPERF_WEB_URL }}
+          SPEEDTEST_OPEN_SPEED_TEST_URL: ${{ secrets.SPEEDTEST_OPEN_SPEED_TEST_URL }}
+          SPEEDTEST_CLOUDFLARE_URL: ${{ secrets.SPEEDTEST_CLOUDFLARE_URL }}
+          SPEEDTEST_CLI_PROVIDER_ORDER: ${{ secrets.SPEEDTEST_CLI_PROVIDER_ORDER }}
+        run: |
+          : "${SPEEDTEST_NPERF_ANDROID_CONFIG:?Missing SPEEDTEST_NPERF_ANDROID_CONFIG}"
+          : "${SPEEDTEST_NPERF_IOS_CONFIG:?Missing SPEEDTEST_NPERF_IOS_CONFIG}"
+          : "${SPEEDTEST_NPERF_WEB_URL:?Missing SPEEDTEST_NPERF_WEB_URL}"
+          : "${SPEEDTEST_OPEN_SPEED_TEST_URL:?Missing SPEEDTEST_OPEN_SPEED_TEST_URL}"
+          : "${SPEEDTEST_CLI_PROVIDER_ORDER:?Missing SPEEDTEST_CLI_PROVIDER_ORDER}"
+          flutter build ipa --release --no-codesign \
+            --dart-define=SPEEDTEST_NPERF_ANDROID_CONFIG="${SPEEDTEST_NPERF_ANDROID_CONFIG}" \
+            --dart-define=SPEEDTEST_NPERF_IOS_CONFIG="${SPEEDTEST_NPERF_IOS_CONFIG}" \
+            --dart-define=SPEEDTEST_NPERF_WEB_URL="${SPEEDTEST_NPERF_WEB_URL}" \
+            --dart-define=SPEEDTEST_OPEN_SPEED_TEST_URL="${SPEEDTEST_OPEN_SPEED_TEST_URL}" \
+            --dart-define=SPEEDTEST_CLOUDFLARE_URL="${SPEEDTEST_CLOUDFLARE_URL}" \
+            --dart-define=SPEEDTEST_CLI_PROVIDER_ORDER="${SPEEDTEST_CLI_PROVIDER_ORDER}"
 
       - name: Prepare release assets
         run: |

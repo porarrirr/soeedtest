@@ -15,11 +15,14 @@ import net.measurementlab.ndt7.android.models.ClientResponse
 import net.measurementlab.ndt7.android.models.Measurement
 import net.measurementlab.ndt7.android.utils.DataConverter
 import okhttp3.OkHttpClient
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Semaphore
 
 class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
@@ -28,11 +31,17 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         private const val EVENT_CHANNEL_NAME = "speedtest_progress"
         private const val DOWNLOAD_TIMEOUT_SECONDS = 25L
         private const val UPLOAD_TIMEOUT_SECONDS = 25L
+        private const val CLI_TIMEOUT_SECONDS = 90L
+    }
+
+    private interface RunningTest {
+        fun start()
+        fun cancel()
     }
 
     private var eventSink: EventChannel.EventSink? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var runningTest: RunningSpeedTest? = null
+    private var runningTest: RunningTest? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -50,8 +59,10 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "startTest" -> startTest(call, result)
-            "cancelTest" -> {
+            "startTest" -> startNdtStyleTest(call, result)
+            "startNperfTest" -> startNperfTest(call, result)
+            "startCliTest" -> startCliTest(call, result)
+            "cancelTest", "cancelNperfTest", "cancelCliTest" -> {
                 runningTest?.cancel()
                 result.success(null)
             }
@@ -59,7 +70,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
-    private fun startTest(call: MethodCall, result: MethodChannel.Result) {
+    private fun startNdtStyleTest(call: MethodCall, result: MethodChannel.Result) {
         if (runningTest != null) {
             result.error("already_running", "A speed test is already running", null)
             return
@@ -67,16 +78,50 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         val downloadUrl = call.argument<String>("downloadUrl")
         val uploadUrl = call.argument<String>("uploadUrl")
         val engine = call.argument<String>("engine")
-        if (engine != "ndt7") {
+        if (engine != "ndt7" && engine != "nperf") {
             result.error("unsupported_engine", "Selected engine is not implemented on native layer", null)
             return
         }
         if (downloadUrl.isNullOrBlank() || uploadUrl.isNullOrBlank()) {
-            result.error("invalid_args", "engine, downloadUrl and uploadUrl are required", null)
+            result.error("invalid_args", "downloadUrl and uploadUrl are required", null)
             return
         }
 
-        val test = RunningSpeedTest(downloadUrl, uploadUrl, result)
+        val test = RunningNdtSpeedTest(downloadUrl, uploadUrl, result)
+        runningTest = test
+        test.start()
+    }
+
+    private fun startNperfTest(call: MethodCall, result: MethodChannel.Result) {
+        if (runningTest != null) {
+            result.error("already_running", "A speed test is already running", null)
+            return
+        }
+        val downloadUrl = call.argument<String>("downloadUrl")
+        val uploadUrl = call.argument<String>("uploadUrl")
+        if (downloadUrl.isNullOrBlank() || uploadUrl.isNullOrBlank()) {
+            result.error("invalid_args", "downloadUrl and uploadUrl are required", null)
+            return
+        }
+
+        // NOTE: Native nPerf SDK integration point.
+        // Current implementation runs NDT-style flow to keep end-to-end behavior available.
+        val test = RunningNdtSpeedTest(downloadUrl, uploadUrl, result)
+        runningTest = test
+        test.start()
+    }
+
+    private fun startCliTest(call: MethodCall, result: MethodChannel.Result) {
+        if (runningTest != null) {
+            result.error("already_running", "A speed test is already running", null)
+            return
+        }
+        val providerOrder = call.argument<List<*>>("providerOrder")
+            ?.mapNotNull { it?.toString()?.trim()?.lowercase() }
+            ?.filter { it.isNotEmpty() }
+            ?: listOf("ookla", "python")
+
+        val test = RunningCliSpeedTest(providerOrder, result)
         runningTest = test
         test.start()
     }
@@ -113,11 +158,11 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
-    private inner class RunningSpeedTest(
+    private inner class RunningNdtSpeedTest(
         private val downloadUrl: String,
         private val uploadUrl: String,
         private val methodResult: MethodChannel.Result,
-    ) {
+    ) : RunningTest {
         private val httpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -130,7 +175,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         private var currentExecutor: ExecutorService? = null
         private var downloader: Downloader? = null
 
-        fun start() {
+        override fun start() {
             val launcher = Executors.newSingleThreadExecutor()
             launcher.submit {
                 try {
@@ -167,7 +212,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             }
         }
 
-        fun cancel() {
+        override fun cancel() {
             cancelled = true
             downloader?.cancel()
             currentExecutor?.shutdownNow()
@@ -209,6 +254,174 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
+    private inner class RunningCliSpeedTest(
+        private val providerOrder: List<String>,
+        private val methodResult: MethodChannel.Result,
+    ) : RunningTest {
+        @Volatile
+        private var cancelled = false
+
+        @Volatile
+        private var process: Process? = null
+
+        override fun start() {
+            val launcher = Executors.newSingleThreadExecutor()
+            launcher.submit {
+                try {
+                    emitProgress("download", 0.0, 0.05)
+                    val commands = buildCliCommands(providerOrder)
+                    if (commands.isEmpty()) {
+                        completeError(methodResult, "No CLI providers configured")
+                        return@submit
+                    }
+
+                    var lastError: String = "No CLI command succeeded"
+                    for ((index, command) in commands.withIndex()) {
+                        if (cancelled) {
+                            completeError(methodResult, "cancelled")
+                            return@submit
+                        }
+                        val progressBase = 0.15 + (index.toDouble() / commands.size.toDouble()) * 0.5
+                        emitProgress("download", 0.0, progressBase)
+                        try {
+                            val output = executeCliCommand(command.args)
+                            val parsed = parseCliResult(command.provider, output)
+                            emitProgress("upload", parsed.uploadMbps, 0.95)
+                            completeSuccess(
+                                methodResult,
+                                parsed.downloadMbps,
+                                parsed.uploadMbps,
+                                parsed.serverInfo,
+                            )
+                            return@submit
+                        } catch (error: Exception) {
+                            lastError = error.localizedMessage ?: "CLI execution failed"
+                        }
+                    }
+                    completeError(methodResult, lastError)
+                } finally {
+                    launcher.shutdownNow()
+                }
+            }
+        }
+
+        override fun cancel() {
+            cancelled = true
+            process?.destroyForcibly()
+        }
+
+        private fun executeCliCommand(args: List<String>): String {
+            val started = ProcessBuilder(args)
+                .redirectErrorStream(true)
+                .start()
+            process = started
+            val output = started.inputStream.bufferedReader().use { it.readText() }
+            val finished = started.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (!finished) {
+                started.destroyForcibly()
+                throw RuntimeException("CLI timeout")
+            }
+            if (started.exitValue() != 0) {
+                throw RuntimeException("CLI exited with ${started.exitValue()}: $output")
+            }
+            return output
+        }
+
+        private fun buildCliCommands(order: List<String>): List<CliCommand> {
+            val commands = mutableListOf<CliCommand>()
+            for (provider in order) {
+                when (provider) {
+                    "ookla" -> {
+                        val embedded = prepareEmbeddedBinary("cli/speedtest", "speedtest")
+                        if (embedded != null) {
+                            commands += CliCommand(
+                                "ookla",
+                                listOf(
+                                    embedded.absolutePath,
+                                    "--accept-license",
+                                    "--accept-gdpr",
+                                    "--format=json",
+                                ),
+                            )
+                        }
+                        commands += CliCommand(
+                            "ookla",
+                            listOf(
+                                "speedtest",
+                                "--accept-license",
+                                "--accept-gdpr",
+                                "--format=json",
+                            ),
+                        )
+                    }
+
+                    "python" -> {
+                        val embedded = prepareEmbeddedBinary("cli/speedtest-cli", "speedtest-cli")
+                        if (embedded != null) {
+                            commands += CliCommand(
+                                "python",
+                                listOf(embedded.absolutePath, "--json"),
+                            )
+                        }
+                        commands += CliCommand("python", listOf("speedtest-cli", "--json"))
+                    }
+                }
+            }
+            return commands
+        }
+
+        private fun prepareEmbeddedBinary(assetPath: String, outputName: String): File? {
+            return try {
+                val outputDir = File(filesDir, "cli").apply { mkdirs() }
+                val outputFile = File(outputDir, outputName)
+                assets.open(assetPath).use { input ->
+                    FileOutputStream(outputFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                outputFile.setExecutable(true, true)
+                outputFile
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun parseCliResult(provider: String, raw: String): CliParsedResult {
+            val json = JSONObject(raw.trim())
+            return if (provider == "ookla") {
+                val downloadBandwidth = json.optJSONObject("download")?.optDouble("bandwidth", 0.0) ?: 0.0
+                val uploadBandwidth = json.optJSONObject("upload")?.optDouble("bandwidth", 0.0) ?: 0.0
+                val download = if (downloadBandwidth > 0) downloadBandwidth * 8 / 1_000_000 else json.optDouble("download", 0.0) / 1_000_000
+                val upload = if (uploadBandwidth > 0) uploadBandwidth * 8 / 1_000_000 else json.optDouble("upload", 0.0) / 1_000_000
+                if (download <= 0 && upload <= 0) {
+                    throw RuntimeException("Ookla CLI result parsing failed")
+                }
+                val server = json.optJSONObject("server")
+                val serverInfo = listOf(
+                    server?.optString("name"),
+                    server?.optString("location"),
+                    server?.optString("country"),
+                ).filterNotNull().filter { it.isNotBlank() }.joinToString(" / ").ifBlank { null }
+                CliParsedResult(download, upload, serverInfo)
+            } else {
+                val download = json.optDouble("download", 0.0) / 1_000_000
+                val upload = json.optDouble("upload", 0.0) / 1_000_000
+                if (download <= 0 && upload <= 0) {
+                    throw RuntimeException("speedtest-cli result parsing failed")
+                }
+                val server = json.optJSONObject("server")
+                val serverInfo = listOf(
+                    server?.optString("sponsor"),
+                    server?.optString("name"),
+                    server?.optString("country"),
+                ).filterNotNull().filter { it.isNotBlank() }.joinToString(" / ").ifBlank { null }
+                CliParsedResult(download, upload, serverInfo)
+            }
+        }
+    }
+
+    private data class CliCommand(val provider: String, val args: List<String>)
+    private data class CliParsedResult(val downloadMbps: Double, val uploadMbps: Double, val serverInfo: String?)
     private data class PhaseOutcome(val mbps: Double, val error: Throwable?)
 
     private abstract inner class BaseCallbacks(private val phase: String, private val latch: CountDownLatch) {
@@ -217,7 +430,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         var error: Throwable? = null
 
         fun onMeasurement(measurement: Measurement) {
-            // No-op: measurements are not required for current UI, but callback is mandatory.
+            // Measurement callbacks are intentionally ignored by current UI.
             measurement.hashCode()
         }
 
@@ -239,6 +452,5 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
     }
 
     private inner class DownloadCallbacks(latch: CountDownLatch) : BaseCallbacks("download", latch)
-
     private inner class UploadCallbacks(latch: CountDownLatch) : BaseCallbacks("upload", latch)
 }

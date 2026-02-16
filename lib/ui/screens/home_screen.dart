@@ -4,6 +4,7 @@ import "package:flutter/material.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 import "package:intl/intl.dart";
 
+import "../../app/engine_availability.dart";
 import "../../app/providers.dart";
 import "../../domain/models/connection_type.dart";
 import "../../domain/models/speed_test_engine.dart";
@@ -12,6 +13,7 @@ import "consent_screen.dart";
 import "history_screen.dart";
 import "settings_screen.dart";
 import "testing_screen.dart";
+import "web_speed_test_screen.dart";
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -31,6 +33,10 @@ class HomeScreen extends ConsumerWidget {
       speedTestEngineControllerProvider,
     );
     final SpeedTestState testState = ref.watch(speedTestControllerProvider);
+    final Map<SpeedTestEngine, EngineAvailability> availabilityMap = ref.watch(
+      engineAvailabilityProvider,
+    );
+    final List<String> startupIssues = ref.watch(startupConfigIssuesProvider);
 
     final bool granted = consent.valueOrNull?.granted ?? false;
     final SpeedTestEngine selectedEngine =
@@ -38,6 +44,9 @@ class HomeScreen extends ConsumerWidget {
     final SpeedTestResult? latest = history.valueOrNull?.isNotEmpty == true
         ? history.valueOrNull!.first
         : null;
+    final EngineAvailability availability =
+        availabilityMap[selectedEngine] ??
+        const EngineAvailability.unavailable("設定を確認してください。");
 
     return Scaffold(
       appBar: AppBar(
@@ -86,11 +95,29 @@ class HomeScreen extends ConsumerWidget {
             Card(
               child: ListTile(
                 title: const Text("測定エンジン"),
-                subtitle: Text(
-                  "${selectedEngine.label} (${selectedEngine.statusLabel})",
-                ),
+                subtitle: Text(selectedEngine.label),
               ),
             ),
+            if (startupIssues.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              Card(
+                color: Colors.orange.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(
+                        "起動時設定エラー",
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      for (final String item in startupIssues) Text("• $item"),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             if (latest != null)
               Card(
@@ -116,22 +143,31 @@ class HomeScreen extends ConsumerWidget {
                 "同意未取得のため測定できません。",
                 style: TextStyle(color: Colors.red),
               ),
-            if (granted && !selectedEngine.isImplemented)
+            if (granted && !availability.available)
               Text(
-                "${selectedEngine.label} は未対応です。設定から実装済みエンジンを選んでください。",
+                availability.reason ?? "${selectedEngine.label} は利用できません。",
                 style: const TextStyle(color: Colors.red),
               ),
             const SizedBox(height: 8),
             SizedBox(
               height: 52,
               child: FilledButton(
-                onPressed: testState.running || !selectedEngine.isImplemented
+                onPressed: testState.running || !availability.available
                     ? null
                     : () async {
                         if (!granted) {
                           Navigator.of(context).push(
                             MaterialPageRoute<void>(
                               builder: (_) => const ConsentScreen(),
+                            ),
+                          );
+                          return;
+                        }
+                        if (selectedEngine.isWebFlow) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  WebSpeedTestScreen(engine: selectedEngine),
                             ),
                           );
                           return;

@@ -1,7 +1,7 @@
 # Speed Test (Flutter)
 
 iOS / Android 対応の回線速度測定アプリです。  
-設定画面から測定エンジンを選択できます（現状は M-Lab NDT7 が実装済み）。
+設定画面から測定エンジンを選択できます。
 
 ## Features
 
@@ -11,8 +11,10 @@ iOS / Android 対応の回線速度測定アプリです。
 - ローカル履歴保存（Hive）
 - 履歴一覧・詳細・簡易フィルタ（Wi-Fi / Mobile）
 - 設定で同意撤回
-- 測定エンジン選択（NDT7 / nPerf / OpenSpeedTest / Cloudflare）
+- 測定エンジン選択（NDT7 / nPerf / OpenSpeedTest / Cloudflare / Speedtest CLI）
 - 結果テキスト共有
+- OpenSpeedTest / Cloudflare の WebView 実行
+- Speedtest CLI（Androidのみ）
 
 ## Architecture
 
@@ -21,8 +23,17 @@ iOS / Android 対応の回線速度測定アプリです。
 - Flutter ⇄ Native
   - `MethodChannel`: `speedtest`
   - `EventChannel`: `speedtest_progress`
-- Android: ndt7-client-android の実装を組み込み（`ndt7`）
-- iOS: `NDT7` (ndt7-client-ios) CocoaPods（`ndt7`）
+- Android: ndt7-client-android + CLI 実行（`ndt7` / `nperf` / `speedtestCli`）
+- iOS: `NDT7` (ndt7-client-ios) CocoaPods（`ndt7` / `nperf`）
+
+## Runtime Config (`--dart-define`)
+
+- `SPEEDTEST_NPERF_ANDROID_CONFIG`
+- `SPEEDTEST_NPERF_IOS_CONFIG`
+- `SPEEDTEST_NPERF_WEB_URL`
+- `SPEEDTEST_OPEN_SPEED_TEST_URL`
+- `SPEEDTEST_CLOUDFLARE_URL`（未指定時: `https://speed.cloudflare.com`）
+- `SPEEDTEST_CLI_PROVIDER_ORDER`（例: `ookla,python`）
 
 ## Local Commands
 

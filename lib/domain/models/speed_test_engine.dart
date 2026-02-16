@@ -1,4 +1,4 @@
-enum SpeedTestEngine { ndt7, nperf, openSpeedTest, cloudflareWeb }
+enum SpeedTestEngine { ndt7, nperf, openSpeedTest, cloudflareWeb, speedtestCli }
 
 extension SpeedTestEngineX on SpeedTestEngine {
   String get storageValue => name;
@@ -13,17 +13,18 @@ extension SpeedTestEngineX on SpeedTestEngine {
         return "OpenSpeedTest";
       case SpeedTestEngine.cloudflareWeb:
         return "Cloudflare Speed Test";
+      case SpeedTestEngine.speedtestCli:
+        return "Speedtest CLI";
     }
   }
 
-  String get statusLabel {
-    if (isImplemented) {
-      return "実装済み";
-    }
-    return "未対応";
+  bool get isWebFlow {
+    return this == SpeedTestEngine.nperf ||
+        this == SpeedTestEngine.openSpeedTest ||
+        this == SpeedTestEngine.cloudflareWeb;
   }
 
-  bool get isImplemented => this == SpeedTestEngine.ndt7;
+  bool get isNativeFlow => !isWebFlow;
 
   static SpeedTestEngine fromStorageValue(String? value) {
     if (value == null) {

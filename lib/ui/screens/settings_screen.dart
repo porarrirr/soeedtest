@@ -1,6 +1,7 @@
 import "package:flutter/material.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 
+import "../../app/engine_availability.dart";
 import "../../app/providers.dart";
 import "../../domain/models/speed_test_engine.dart";
 import "consent_screen.dart";
@@ -18,6 +19,10 @@ class SettingsScreen extends ConsumerWidget {
     );
     final SpeedTestEngine selectedEngine =
         selectedEngineAsync.valueOrNull ?? SpeedTestEngine.ndt7;
+    final Map<SpeedTestEngine, EngineAvailability> availabilityMap = ref.watch(
+      engineAvailabilityProvider,
+    );
+    final List<String> startupIssues = ref.watch(startupConfigIssuesProvider);
     final bool granted = consent.valueOrNull?.granted ?? false;
 
     return Scaffold(
@@ -58,28 +63,41 @@ class SettingsScreen extends ConsumerWidget {
             title: Text("測定エンジン"),
             subtitle: Text("速度測定で使用する基盤を選択します。"),
           ),
-          for (final SpeedTestEngine engine in SpeedTestEngine.values)
+          if (startupIssues.isNotEmpty)
             ListTile(
-              title: Text(engine.label),
-              subtitle: Text(
-                engine.isImplemented
-                    ? engine.statusLabel
-                    : "${engine.statusLabel} (選択のみ)",
-              ),
-              trailing: Icon(
-                selectedEngine == engine
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_off,
-              ),
-              onTap: () async {
-                await ref
-                    .read(speedTestEngineControllerProvider.notifier)
-                    .setSelectedEngine(engine);
-                if (!context.mounted) {
-                  return;
-                }
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("測定エンジンを ${engine.label} に変更しました。")),
+              title: const Text("設定エラー"),
+              subtitle: Text(startupIssues.join("\n")),
+            ),
+          for (final SpeedTestEngine engine in SpeedTestEngine.values)
+            Builder(
+              builder: (BuildContext context) {
+                final EngineAvailability availability =
+                    availabilityMap[engine] ??
+                    const EngineAvailability.unavailable("設定を確認してください。");
+                final String subtitle = availability.available
+                    ? "利用可能"
+                    : (availability.reason ?? "利用できません");
+                return ListTile(
+                  title: Text(engine.label),
+                  subtitle: Text(subtitle),
+                  trailing: Icon(
+                    selectedEngine == engine
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                  ),
+                  onTap: () async {
+                    await ref
+                        .read(speedTestEngineControllerProvider.notifier)
+                        .setSelectedEngine(engine);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("測定エンジンを ${engine.label} に変更しました。"),
+                      ),
+                    );
+                  },
                 );
               },
             ),

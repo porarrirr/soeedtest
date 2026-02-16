@@ -37,9 +37,25 @@ import UIKit
     switch call.method {
     case "startTest":
       startTest(arguments: call.arguments, result: result)
+    case "startNperfTest":
+      startNperfTest(arguments: call.arguments, result: result)
+    case "startCliTest":
+      result(
+        FlutterError(
+          code: "unsupported_engine",
+          message: "Speedtest CLI is not supported on iOS",
+          details: nil
+        )
+      )
     case "cancelTest":
       cancelRequested = true
       ndt7Test?.cancel()
+      result(nil)
+    case "cancelNperfTest":
+      cancelRequested = true
+      ndt7Test?.cancel()
+      result(nil)
+    case "cancelCliTest":
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -60,7 +76,7 @@ import UIKit
       result(FlutterError(code: "invalid_args", message: "engine, downloadUrl and uploadUrl are required", details: nil))
       return
     }
-    if engine != "ndt7" {
+    if engine != "ndt7" && engine != "nperf" {
       result(FlutterError(code: "unsupported_engine", message: "Selected engine is not implemented on native layer", details: nil))
       return
     }
@@ -97,6 +113,31 @@ import UIKit
         "serverInfo": self.lastServerInfo as Any,
       ])
     }
+  }
+
+  private func startNperfTest(arguments: Any?, result: @escaping FlutterResult) {
+    guard
+      let map = arguments as? [String: Any],
+      let downloadUrl = map["downloadUrl"] as? String,
+      let uploadUrl = map["uploadUrl"] as? String
+    else {
+      result(
+        FlutterError(
+          code: "invalid_args",
+          message: "downloadUrl and uploadUrl are required",
+          details: nil
+        )
+      )
+      return
+    }
+    startTest(
+      arguments: [
+        "engine": "nperf",
+        "downloadUrl": downloadUrl,
+        "uploadUrl": uploadUrl,
+      ],
+      result: result
+    )
   }
 
   private func buildLocateOverride(downloadUrl: String, uploadUrl: String) -> Data? {

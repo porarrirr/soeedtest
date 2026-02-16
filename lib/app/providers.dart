@@ -2,10 +2,13 @@ import "dart:async";
 
 import "package:connectivity_plus/connectivity_plus.dart";
 import "package:dio/dio.dart";
+import "package:flutter/foundation.dart";
 import "package:flutter_riverpod/flutter_riverpod.dart";
 import "package:hive/hive.dart";
 import "package:uuid/uuid.dart";
 
+import "engine_availability.dart";
+import "runtime_config.dart";
 import "../data/network/locate_api_client.dart";
 import "../data/repositories/consent_repository_impl.dart";
 import "../data/repositories/history_repository_impl.dart";
@@ -18,6 +21,8 @@ import "../domain/repositories/consent_repository.dart";
 import "../domain/repositories/history_repository.dart";
 import "../domain/repositories/speed_test_engine_repository.dart";
 import "../domain/usecases/run_speed_test_usecase.dart";
+import "../platform/cli_speedtest_channel.dart";
+import "../platform/nperf_channel.dart";
 import "../platform/speedtest_channel.dart";
 
 final Provider<Box<dynamic>> settingsBoxProvider = Provider<Box<dynamic>>((
@@ -49,6 +54,64 @@ final Provider<LocateApiClient> locateApiClientProvider =
 final Provider<SpeedtestChannel> speedtestChannelProvider =
     Provider<SpeedtestChannel>((Ref ref) {
       return SpeedtestChannel();
+    });
+
+final Provider<NperfChannel> nperfChannelProvider = Provider<NperfChannel>((
+  Ref ref,
+) {
+  return NperfChannel();
+});
+
+final Provider<CliSpeedtestChannel> cliSpeedtestChannelProvider =
+    Provider<CliSpeedtestChannel>((Ref ref) {
+      return CliSpeedtestChannel();
+    });
+
+final Provider<AppRuntimeConfig> runtimeConfigProvider =
+    Provider<AppRuntimeConfig>((Ref ref) {
+      return AppRuntimeConfig.fromEnvironment();
+    });
+
+final Provider<EngineAvailabilityService> engineAvailabilityServiceProvider =
+    Provider<EngineAvailabilityService>((Ref ref) {
+      return EngineAvailabilityService(
+        isWeb: kIsWeb,
+        platform: defaultTargetPlatform,
+      );
+    });
+
+final Provider<Map<SpeedTestEngine, EngineAvailability>>
+engineAvailabilityProvider = Provider<Map<SpeedTestEngine, EngineAvailability>>(
+  (Ref ref) {
+    final AppRuntimeConfig config = ref.watch(runtimeConfigProvider);
+    final EngineAvailabilityService service = ref.watch(
+      engineAvailabilityServiceProvider,
+    );
+    return <SpeedTestEngine, EngineAvailability>{
+      for (final SpeedTestEngine engine in SpeedTestEngine.values)
+        engine: service.availabilityFor(engine, config),
+    };
+  },
+);
+
+final Provider<List<String>> startupConfigIssuesProvider =
+    Provider<List<String>>((Ref ref) {
+      final Map<SpeedTestEngine, EngineAvailability> availability = ref.watch(
+        engineAvailabilityProvider,
+      );
+      return availability.entries
+          .where(
+            (MapEntry<SpeedTestEngine, EngineAvailability> item) =>
+                !item.value.available &&
+                item.value.reason != null &&
+                (item.value.reason!.contains("dart-define") ||
+                    item.value.reason!.contains("URL")),
+          )
+          .map(
+            (MapEntry<SpeedTestEngine, EngineAvailability> item) =>
+                "${item.key.label}: ${item.value.reason}",
+          )
+          .toList();
     });
 
 final Provider<Connectivity> connectivityProvider = Provider<Connectivity>((
@@ -268,6 +331,7 @@ final Provider<RunSpeedTestUseCase> runSpeedTestUseCaseProvider =
       return RunSpeedTestUseCase(
         locateApiClient: ref.watch(locateApiClientProvider),
         speedtestChannel: ref.watch(speedtestChannelProvider),
+        cliSpeedtestChannel: ref.watch(cliSpeedtestChannelProvider),
         uuid: ref.watch(uuidProvider),
       );
     });
@@ -322,11 +386,23 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
     final SpeedTestEngine selectedEngine =
         ref.read(speedTestEngineControllerProvider).valueOrNull ??
         SpeedTestEngine.ndt7;
-    if (!selectedEngine.isImplemented) {
+    if (selectedEngine.isWebFlow) {
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
-        errorMessage: "${selectedEngine.label} は未対応です。設定で実装済みエンジンを選択してください。",
+        errorMessage: "${selectedEngine.label} はWeb測定画面から実行してください。",
+      );
+      return;
+    }
+    final EngineAvailability availability =
+        ref.read(engineAvailabilityProvider)[selectedEngine] ??
+        const EngineAvailability.unavailable("設定を確認してください。");
+    if (!availability.available) {
+      state = state.copyWith(
+        phase: TestPhase.error,
+        running: false,
+        errorMessage:
+            availability.reason ?? "${selectedEngine.label} は利用できません。",
       );
       return;
     }
@@ -347,6 +423,7 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
           .execute(
             connectionType: connection,
             engine: selectedEngine,
+            config: ref.read(runtimeConfigProvider),
             onProgress: (NativeSpeedtestProgress progress) {
               final TestPhase phase = progress.phase == "upload"
                   ? TestPhase.upload
@@ -379,7 +456,7 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
-        errorMessage: "${error.engine.label} は未対応です。設定で実装済みエンジンを選択してください。",
+        errorMessage: error.reason ?? "${error.engine.label} は利用できません。",
       );
     } catch (error) {
       if (_cancelRequested) {
