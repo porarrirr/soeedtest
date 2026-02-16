@@ -103,11 +103,18 @@ jobs:
             build/ios/archive/*.xcarchive
             build/ios/iphoneos/Runner.app
 
+      - name: Compute release name
+        id: release_meta
+        shell: bash
+        run: |
+          release_name="$(TZ=Asia/Tokyo git show -s --date=format-local:'%Y-%m-%d %H:%M %Z' --format=%cd "$GITHUB_SHA")"
+          echo "release_name=$release_name" >> "$GITHUB_OUTPUT"
+
       - name: Publish iOS artifacts to GitHub Release
         uses: ncipollo/release-action@v1
         with:
           tag: build-${{ github.sha }}
-          name: Build ${{ github.sha }}
+          name: ${{ steps.release_meta.outputs.release_name }}
           body: Automated build artifacts for commit ${{ github.sha }}
           prerelease: true
           allowUpdates: true
