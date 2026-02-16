@@ -117,7 +117,11 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             result.error("already_running", "A speed test is already running", null)
             return
         }
-        val test = RunningCliSpeedTest(result)
+        val providerOrder = (call.argument<List<Any?>>("providerOrder") ?: emptyList())
+            .mapNotNull { (it as? String)?.trim()?.lowercase() }
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf("ookla") }
+        val test = RunningCliSpeedTest(result, providerOrder)
         runningTest = test
         test.start()
     }
@@ -147,9 +151,14 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
     }
 
-    private fun completeError(result: MethodChannel.Result, message: String, code: String = "native_test_error") {
+    private fun completeError(
+        result: MethodChannel.Result,
+        message: String,
+        code: String = "native_test_error",
+        details: Any? = null,
+    ) {
         mainHandler.post {
-            result.error(code, message, null)
+            result.error(code, message, details)
             runningTest = null
         }
     }
@@ -252,6 +261,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
 
     private inner class RunningCliSpeedTest(
         private val methodResult: MethodChannel.Result,
+        private val providerOrder: List<String>,
     ) : RunningTest {
         @Volatile
         private var cancelled = false
@@ -272,7 +282,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                     emitProgress("download", 0.0, 0.20)
                     val output = executeCliCommand(command.args)
                     val parsed = parseOoklaResult(output)
-                    emitProgress("upload", parsed.uploadMbps, 0.95)
+                    emitProgress("upload", parsed.uploadMbps, 1.0)
                     completeSuccess(
                         methodResult,
                         parsed.downloadMbps,
@@ -280,11 +290,33 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                         parsed.serverInfo,
                     )
                 } catch (error: CliBinaryMissingException) {
-                    completeError(methodResult, error.message ?: "CLI binary missing", "binary_missing")
+                    completeError(
+                        methodResult,
+                        error.message ?: "CLI binary missing",
+                        "binary_missing",
+                        mapOf(
+                            "providerOrder" to providerOrder,
+                            "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                            "sdkInt" to Build.VERSION.SDK_INT,
+                        ),
+                    )
                 } catch (error: CliExecutionException) {
-                    completeError(methodResult, error.message ?: "CLI execution failed", error.code)
+                    completeError(
+                        methodResult,
+                        error.message ?: "CLI execution failed",
+                        error.code,
+                        error.details,
+                    )
                 } catch (error: Exception) {
-                    completeError(methodResult, error.localizedMessage ?: "CLI execution failed")
+                    completeError(
+                        methodResult,
+                        error.localizedMessage ?: "CLI execution failed",
+                        details = mapOf(
+                            "providerOrder" to providerOrder,
+                            "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                            "sdkInt" to Build.VERSION.SDK_INT,
+                        ),
+                    )
                 } finally {
                     launcher.shutdownNow()
                 }
@@ -302,30 +334,79 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                     .redirectErrorStream(true)
                     .start()
             } catch (error: Exception) {
-                throw CliExecutionException("binary_not_executable", error.localizedMessage ?: "Failed to start CLI process")
+                throw CliExecutionException(
+                    "binary_not_executable",
+                    error.localizedMessage ?: "Failed to start CLI process",
+                    mapOf(
+                        "command" to args.joinToString(" "),
+                        "cause" to (error.localizedMessage ?: error.javaClass.simpleName),
+                    ),
+                )
             }
             process = started
-            val output = started.inputStream.bufferedReader().use { it.readText() }
+            val outputExecutor = Executors.newSingleThreadExecutor()
+            val outputFuture = outputExecutor.submit<String> {
+                started.inputStream.bufferedReader().use { it.readText() }
+            }
             val finished = started.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             if (!finished) {
                 started.destroyForcibly()
-                throw CliExecutionException("cli_timeout", "Speedtest CLI timed out")
+                val output = readOutputSafely(outputFuture)
+                outputExecutor.shutdownNow()
+                process = null
+                throw CliExecutionException(
+                    "cli_timeout",
+                    "Speedtest CLI timed out",
+                    mapOf(
+                        "command" to args.joinToString(" "),
+                        "output" to summarizeOutput(output),
+                    ),
+                )
             }
+            val output = readOutputSafely(outputFuture)
+            outputExecutor.shutdownNow()
             if (started.exitValue() != 0) {
+                process = null
                 throw CliExecutionException(
                     "cli_failed",
                     "CLI exited with ${started.exitValue()}: ${summarizeOutput(output)}",
+                    mapOf(
+                        "command" to args.joinToString(" "),
+                        "exitCode" to started.exitValue(),
+                        "output" to summarizeOutput(output),
+                    ),
                 )
             }
+            process = null
             return output
         }
 
+        private fun readOutputSafely(outputFuture: java.util.concurrent.Future<String>): String {
+            return try {
+                outputFuture.get(3, TimeUnit.SECONDS)
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
         private fun buildOoklaCommand(): CliCommand {
+            if (providerOrder.none { it == "ookla" }) {
+                throw CliExecutionException(
+                    "cli_provider_unavailable",
+                    "No supported CLI provider in providerOrder",
+                    mapOf(
+                        "providerOrder" to providerOrder,
+                        "supportedProviders" to listOf("ookla"),
+                    ),
+                )
+            }
             val supportedAbis = Build.SUPPORTED_ABIS?.toList() ?: emptyList()
             for (abi in supportedAbis) {
                 val assetPath = when (abi) {
                     "arm64-v8a" -> "cli/arm64-v8a/speedtest"
                     "armeabi-v7a" -> "cli/armeabi-v7a/speedtest"
+                    "x86_64" -> "cli/x86_64/speedtest"
+                    "x86" -> "cli/x86/speedtest"
                     else -> null
                 } ?: continue
                 val embedded = prepareEmbeddedBinary(assetPath, abi)
@@ -336,6 +417,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                             "--accept-license",
                             "--accept-gdpr",
                             "--format=json",
+                            "--progress=no",
                         ),
                     )
                 }
@@ -369,10 +451,19 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
         }
 
         private fun parseOoklaResult(raw: String): CliParsedResult {
+            val jsonText = extractJsonObject(raw.trim()) ?: throw CliExecutionException(
+                "json_parse_failed",
+                "Failed to locate JSON payload in CLI output",
+                mapOf("rawOutput" to summarizeOutput(raw)),
+            )
             val json = try {
-                JSONObject(raw.trim())
-            } catch (_: Exception) {
-                throw CliExecutionException("json_parse_failed", "Failed to parse CLI JSON: ${summarizeOutput(raw)}")
+                JSONObject(jsonText)
+            } catch (error: Exception) {
+                throw CliExecutionException(
+                    "json_parse_failed",
+                    "Failed to parse CLI JSON: ${summarizeOutput(raw)}",
+                    mapOf("rawOutput" to summarizeOutput(raw), "cause" to error.localizedMessage),
+                )
             }
             val downloadBandwidth = json.optJSONObject("download")?.optDouble("bandwidth", 0.0) ?: 0.0
             val uploadBandwidth = json.optJSONObject("upload")?.optDouble("bandwidth", 0.0) ?: 0.0
@@ -387,7 +478,11 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                 json.optDouble("upload", 0.0) / 1_000_000
             }
             if (download <= 0 && upload <= 0) {
-                throw CliExecutionException("json_parse_failed", "Ookla CLI result parsing failed: ${summarizeOutput(raw)}")
+                throw CliExecutionException(
+                    "json_parse_failed",
+                    "Ookla CLI result parsing failed: ${summarizeOutput(raw)}",
+                    mapOf("rawOutput" to summarizeOutput(raw)),
+                )
             }
             val server = json.optJSONObject("server")
             val serverInfo = listOf(
@@ -398,14 +493,30 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             return CliParsedResult(download, upload, serverInfo)
         }
 
+        private fun extractJsonObject(raw: String): String? {
+            if (raw.isBlank()) {
+                return null
+            }
+            val start = raw.indexOf("{")
+            val end = raw.lastIndexOf("}")
+            if (start < 0 || end <= start) {
+                return null
+            }
+            return raw.substring(start, end + 1)
+        }
+
         private fun summarizeOutput(output: String): String {
             val normalized = output.replace("\n", " ").replace("\r", " ").trim()
-            return if (normalized.length > 300) normalized.substring(0, 300) else normalized
+            return if (normalized.length > 400) normalized.substring(0, 400) else normalized
         }
     }
 
     private class CliBinaryMissingException(message: String) : RuntimeException(message)
-    private class CliExecutionException(val code: String, message: String) : RuntimeException(message)
+    private class CliExecutionException(
+        val code: String,
+        message: String,
+        val details: Map<String, Any?>? = null,
+    ) : RuntimeException(message)
     private data class CliCommand(val args: List<String>)
     private data class CliParsedResult(val downloadMbps: Double, val uploadMbps: Double, val serverInfo: String?)
     private data class PhaseOutcome(val mbps: Double, val error: Throwable?)

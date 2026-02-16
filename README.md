@@ -15,6 +15,7 @@ iOS / Android 対応の回線速度測定アプリです。
 - 結果テキスト共有
 - OpenSpeedTest / Cloudflare の WebView 実行
 - Speedtest CLI（Androidのみ）
+- デバッグログ保存・確認画面（設定 > デバッグログ）
 
 ## Architecture
 
@@ -37,10 +38,14 @@ iOS / Android 対応の回線速度測定アプリです。
 
 ## Android CLI Binary Provisioning
 
-- `scripts/fetch_cli_binaries.sh` は Ookla CLI の Linux `.tgz` を展開し、`android/app/src/main/assets/cli/<abi>/speedtest` に配置します。
+- `scripts/fetch_cli_binaries.sh` は Ookla CLI の Linux `.tgz` を展開し、`android/app/src/main/assets/cli/<abi>/speedtest` と `android/app/src/main/cli-binaries/<abi>/speedtest` に配置します。
 - 必須: `OOKLA_CLI_AARCH64_TGZ_URL`
 - 任意: `OOKLA_CLI_ARMHF_TGZ_URL`
+- 任意: `OOKLA_CLI_X86_64_TGZ_URL`
+- 任意: `OOKLA_CLI_X86_TGZ_URL`
 - iOS では Speedtest CLI は未対応です。
+- `android/app/src/main/cli-binaries/<abi>/speedtest` にバイナリを置くと、Androidビルド時に自動で `assets/cli` へコピーされ、APKへ同封されます。
+- `arm64-v8a` バイナリがない場合、Androidビルドは失敗します（開発時のみ `SPEEDTEST_ALLOW_MISSING_CLI=true` で回避可能）。
 
 ## Local Commands
 

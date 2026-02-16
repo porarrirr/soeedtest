@@ -35,6 +35,8 @@ jobs:
         env:
           OOKLA_CLI_AARCH64_TGZ_URL: ${{ secrets.OOKLA_CLI_AARCH64_TGZ_URL }}
           OOKLA_CLI_ARMHF_TGZ_URL: ${{ secrets.OOKLA_CLI_ARMHF_TGZ_URL }}
+          OOKLA_CLI_X86_64_TGZ_URL: ${{ secrets.OOKLA_CLI_X86_64_TGZ_URL }}
+          OOKLA_CLI_X86_TGZ_URL: ${{ secrets.OOKLA_CLI_X86_TGZ_URL }}
         run: bash scripts/fetch_cli_binaries.sh
 
       - name: Build debug APK

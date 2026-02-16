@@ -12,12 +12,14 @@ Future<void> main() async {
   await initStorage();
   final historyBox = Hive.box<dynamic>(historyBoxName);
   final settingsBox = Hive.box<dynamic>(settingsBoxName);
+  final debugLogBox = Hive.box<dynamic>(debugLogBoxName);
 
   runApp(
     ProviderScope(
       overrides: <Override>[
         historyBoxProvider.overrideWithValue(historyBox),
         settingsBoxProvider.overrideWithValue(settingsBox),
+        debugLogBoxProvider.overrideWithValue(debugLogBox),
       ],
       child: const SpeedTestApp(),
     ),

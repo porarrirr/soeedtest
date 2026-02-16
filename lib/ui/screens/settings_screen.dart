@@ -5,6 +5,7 @@ import "../../app/engine_availability.dart";
 import "../../app/providers.dart";
 import "../../domain/models/speed_test_engine.dart";
 import "consent_screen.dart";
+import "debug_log_screen.dart";
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -106,6 +107,17 @@ class SettingsScreen extends ConsumerWidget {
               title: Text("測定エンジン設定の読み込みに失敗しました"),
               subtitle: Text("デフォルト値で継続します。"),
             ),
+          const Divider(),
+          ListTile(
+            title: const Text("デバッグログ"),
+            subtitle: const Text("アプリ内部の測定ログを確認します。"),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const DebugLogScreen()),
+              );
+            },
+          ),
           const Divider(),
           const ListTile(
             title: Text("注意文・ポリシー"),

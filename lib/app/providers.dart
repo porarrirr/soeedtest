@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:convert";
 
 import "package:connectivity_plus/connectivity_plus.dart";
 import "package:dio/dio.dart";
@@ -12,13 +13,16 @@ import "engine_availability.dart";
 import "runtime_config.dart";
 import "../data/network/locate_api_client.dart";
 import "../data/repositories/consent_repository_impl.dart";
+import "../data/repositories/debug_log_repository_impl.dart";
 import "../data/repositories/history_repository_impl.dart";
 import "../data/repositories/speed_test_engine_repository_impl.dart";
 import "../data/storage/hive_boxes.dart";
 import "../domain/models/connection_type.dart";
+import "../domain/models/debug_log_entry.dart";
 import "../domain/models/speed_test_engine.dart";
 import "../domain/models/speed_test_result.dart";
 import "../domain/repositories/consent_repository.dart";
+import "../domain/repositories/debug_log_repository.dart";
 import "../domain/repositories/history_repository.dart";
 import "../domain/repositories/speed_test_engine_repository.dart";
 import "../domain/usecases/run_speed_test_usecase.dart";
@@ -36,6 +40,12 @@ final Provider<Box<dynamic>> historyBoxProvider = Provider<Box<dynamic>>((
   Ref ref,
 ) {
   throw UnimplementedError("historyBoxProvider must be overridden in main()");
+});
+
+final Provider<Box<dynamic>> debugLogBoxProvider = Provider<Box<dynamic>>((
+  Ref ref,
+) {
+  throw UnimplementedError("debugLogBoxProvider must be overridden in main()");
 });
 
 final Provider<Dio> dioProvider = Provider<Dio>((Ref ref) {
@@ -138,6 +148,11 @@ final Provider<HistoryRepository> historyRepositoryProvider =
 final Provider<SpeedTestEngineRepository> speedTestEngineRepositoryProvider =
     Provider<SpeedTestEngineRepository>((Ref ref) {
       return SpeedTestEngineRepositoryImpl(ref.watch(settingsBoxProvider));
+    });
+
+final Provider<DebugLogRepository> debugLogRepositoryProvider =
+    Provider<DebugLogRepository>((Ref ref) {
+      return DebugLogRepositoryImpl(ref.watch(debugLogBoxProvider));
     });
 
 class ConsentSnapshot {
@@ -263,6 +278,69 @@ speedTestEngineControllerProvider =
       );
     });
 
+class DebugLogController
+    extends StateNotifier<AsyncValue<List<DebugLogEntry>>> {
+  DebugLogController(this._repository, this._uuid)
+    : super(const AsyncValue.loading()) {
+    unawaited(reload());
+  }
+
+  static const int _maxEntries = 500;
+
+  final DebugLogRepository _repository;
+  final Uuid _uuid;
+
+  Future<void> reload() async {
+    state = const AsyncValue.loading();
+    try {
+      final List<DebugLogEntry> logs = await _repository.getAll();
+      state = AsyncValue.data(logs);
+    } catch (error, stackTrace) {
+      state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  Future<void> append({
+    required String level,
+    required String category,
+    required String message,
+    String? details,
+  }) async {
+    final DebugLogEntry entry = DebugLogEntry(
+      id: _uuid.v4(),
+      timestampIso: DateTime.now().toIso8601String(),
+      level: level,
+      category: category,
+      message: message,
+      details: details,
+    );
+    await _repository.append(entry);
+
+    final List<DebugLogEntry> current = state.valueOrNull ?? <DebugLogEntry>[];
+    final List<DebugLogEntry> next = <DebugLogEntry>[
+      entry,
+      ...current,
+    ].take(_maxEntries).toList();
+    state = AsyncValue.data(next);
+  }
+
+  Future<void> clear() async {
+    await _repository.clear();
+    state = const AsyncValue.data(<DebugLogEntry>[]);
+  }
+}
+
+final StateNotifierProvider<DebugLogController, AsyncValue<List<DebugLogEntry>>>
+debugLogControllerProvider =
+    StateNotifierProvider<DebugLogController, AsyncValue<List<DebugLogEntry>>>((
+      Ref ref,
+    ) {
+      return DebugLogController(
+        ref.watch(debugLogRepositoryProvider),
+        ref.watch(uuidProvider),
+      );
+    });
+
 final StateProvider<ConnectionType?> historyFilterProvider =
     StateProvider<ConnectionType?>((Ref ref) {
       return null;
@@ -343,6 +421,53 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
   final Ref ref;
   bool _cancelRequested = false;
 
+  Future<void> _logEvent({
+    required String level,
+    required String category,
+    required String message,
+    Map<String, dynamic>? details,
+  }) async {
+    try {
+      await ref
+          .read(debugLogControllerProvider.notifier)
+          .append(
+            level: level,
+            category: category,
+            message: message,
+            details: details == null
+                ? null
+                : const JsonEncoder.withIndent("  ").convert(details),
+          );
+    } catch (_) {
+      // Logging failures should not affect test flow.
+    }
+  }
+
+  String _stackSummary(StackTrace stackTrace) {
+    final List<String> lines = stackTrace
+        .toString()
+        .split("\n")
+        .map((String line) => line.trim())
+        .where((String line) => line.isNotEmpty)
+        .take(5)
+        .toList();
+    return lines.join("\n");
+  }
+
+  Map<String, dynamic>? _platformExceptionDetails(PlatformException exception) {
+    final dynamic rawDetails = exception.details;
+    if (rawDetails is Map<Object?, Object?>) {
+      return rawDetails.map(
+        (Object? key, Object? value) =>
+            MapEntry((key ?? "unknown").toString(), value?.toString()),
+      );
+    }
+    if (rawDetails == null) {
+      return null;
+    }
+    return <String, dynamic>{"details": rawDetails.toString()};
+  }
+
   String _mapNativeError(Object error) {
     if (error is PlatformException) {
       switch (error.code) {
@@ -354,6 +479,8 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
           return "CLI測定がタイムアウトしました。通信環境を確認して再試行してください。";
         case "cli_failed":
           return "CLI測定が失敗しました。詳細: ${error.message}";
+        case "cli_provider_unavailable":
+          return "CLIプロバイダ設定が不正です。SPEEDTEST_CLI_PROVIDER_ORDER を確認してください。";
         case "json_parse_failed":
           return "CLI結果の解析に失敗しました。詳細: ${error.message}";
       }
@@ -379,12 +506,26 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
 
   Future<void> start() async {
     if (state.running) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "start() called while already running",
+        ),
+      );
       return;
     }
     final ConsentSnapshot? consent = ref
         .read(consentControllerProvider)
         .valueOrNull;
     if (consent == null || !consent.granted) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "Start blocked: user consent not granted",
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
@@ -395,6 +536,13 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
 
     final ConnectionType? connection = await _connectionOrNullIfOffline();
     if (connection == null) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "Start blocked: device offline",
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
@@ -406,6 +554,14 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
         ref.read(speedTestEngineControllerProvider).valueOrNull ??
         SpeedTestEngine.ndt7;
     if (selectedEngine.isWebFlow) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "Native start blocked for web flow engine",
+          details: <String, dynamic>{"engine": selectedEngine.name},
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
@@ -417,6 +573,17 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
         ref.read(engineAvailabilityProvider)[selectedEngine] ??
         const EngineAvailability.unavailable("設定を確認してください。");
     if (!availability.available) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "Start blocked: engine unavailable",
+          details: <String, dynamic>{
+            "engine": selectedEngine.name,
+            "reason": availability.reason,
+          },
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
@@ -427,6 +594,17 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
     }
 
     _cancelRequested = false;
+    unawaited(
+      _logEvent(
+        level: "info",
+        category: "speedtest",
+        message: "Speed test started",
+        details: <String, dynamic>{
+          "engine": selectedEngine.name,
+          "connectionType": connection.name,
+        },
+      ),
+    );
     state = state.copyWith(
       phase: TestPhase.download,
       running: true,
@@ -437,6 +615,7 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
     );
 
     try {
+      String? lastProgressPhase;
       final SpeedTestResult result = await ref
           .read(runSpeedTestUseCaseProvider)
           .execute(
@@ -447,6 +626,21 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
               final TestPhase phase = progress.phase == "upload"
                   ? TestPhase.upload
                   : TestPhase.download;
+              if (lastProgressPhase != progress.phase) {
+                lastProgressPhase = progress.phase;
+                unawaited(
+                  _logEvent(
+                    level: "info",
+                    category: "speedtest_progress",
+                    message: "Phase changed: ${progress.phase}",
+                    details: <String, dynamic>{
+                      "engine": selectedEngine.name,
+                      "progress": progress.progress,
+                      "mbps": progress.mbps,
+                    },
+                  ),
+                );
+              }
               state = state.copyWith(
                 phase: phase,
                 running: true,
@@ -457,6 +651,19 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
           );
       await ref.read(historyRepositoryProvider).save(result);
       await ref.read(historyControllerProvider.notifier).reload();
+      unawaited(
+        _logEvent(
+          level: "info",
+          category: "speedtest",
+          message: "Speed test completed",
+          details: <String, dynamic>{
+            "engine": selectedEngine.name,
+            "downloadMbps": result.downloadMbps,
+            "uploadMbps": result.uploadMbps,
+            "serverInfo": result.serverInfo,
+          },
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.done,
         running: false,
@@ -465,26 +672,83 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
         result: result,
         clearError: true,
       );
-    } on LocateApiException catch (_) {
+    } on LocateApiException catch (error, stackTrace) {
+      unawaited(
+        _logEvent(
+          level: "error",
+          category: "speedtest",
+          message: "Locate API failed",
+          details: <String, dynamic>{
+            "error": error.toString(),
+            "stackTrace": _stackSummary(stackTrace),
+          },
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
         errorMessage: "測定先取得に失敗しました。リトライしてください。",
       );
-    } on UnsupportedSpeedTestEngineException catch (error) {
+    } on UnsupportedSpeedTestEngineException catch (error, stackTrace) {
+      unawaited(
+        _logEvent(
+          level: "error",
+          category: "speedtest",
+          message: "Unsupported speed test engine",
+          details: <String, dynamic>{
+            "engine": error.engine.name,
+            "reason": error.reason,
+            "stackTrace": _stackSummary(stackTrace),
+          },
+        ),
+      );
       state = state.copyWith(
         phase: TestPhase.error,
         running: false,
         errorMessage: error.reason ?? "${error.engine.label} は利用できません。",
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (_cancelRequested) {
+        unawaited(
+          _logEvent(
+            level: "info",
+            category: "speedtest",
+            message: "Speed test cancelled while running",
+          ),
+        );
         state = state.copyWith(
           phase: TestPhase.cancelled,
           running: false,
           errorMessage: "測定をキャンセルしました。",
         );
         return;
+      }
+      if (error is PlatformException) {
+        unawaited(
+          _logEvent(
+            level: "error",
+            category: "speedtest_native",
+            message: "Native speed test failed (${error.code})",
+            details: <String, dynamic>{
+              "code": error.code,
+              "message": error.message,
+              "details": _platformExceptionDetails(error),
+              "stackTrace": _stackSummary(stackTrace),
+            },
+          ),
+        );
+      } else {
+        unawaited(
+          _logEvent(
+            level: "error",
+            category: "speedtest",
+            message: "Unhandled speed test exception",
+            details: <String, dynamic>{
+              "error": error.toString(),
+              "stackTrace": _stackSummary(stackTrace),
+            },
+          ),
+        );
       }
       state = state.copyWith(
         phase: TestPhase.error,
@@ -496,10 +760,24 @@ class SpeedTestController extends StateNotifier<SpeedTestState> {
 
   Future<void> cancel() async {
     if (!state.running) {
+      unawaited(
+        _logEvent(
+          level: "warning",
+          category: "speedtest",
+          message: "cancel() called but no running test",
+        ),
+      );
       return;
     }
     _cancelRequested = true;
     await ref.read(runSpeedTestUseCaseProvider).cancel();
+    unawaited(
+      _logEvent(
+        level: "info",
+        category: "speedtest",
+        message: "Cancel requested",
+      ),
+    );
     state = state.copyWith(
       phase: TestPhase.cancelled,
       running: false,
@@ -539,4 +817,5 @@ final FutureProvider<ConnectionType> currentConnectionTypeProvider =
 Future<void> initStorage() async {
   await Hive.openBox<dynamic>(historyBoxName);
   await Hive.openBox<dynamic>(settingsBoxName);
+  await Hive.openBox<dynamic>(debugLogBoxName);
 }

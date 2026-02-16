@@ -31,6 +31,25 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
   double _currentMbps = 0;
   String? _errorMessage;
 
+  Future<void> _logEvent({
+    required String level,
+    required String message,
+    Map<String, dynamic>? details,
+  }) async {
+    try {
+      await ref
+          .read(debugLogControllerProvider.notifier)
+          .append(
+            level: level,
+            category: "web_speedtest",
+            message: message,
+            details: details?.toString(),
+          );
+    } catch (_) {
+      // Ignore logging failures to keep web speed test flow stable.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -38,8 +57,25 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
     if (target == null) {
       _errorMessage = "URL設定が不正です。";
       _loading = false;
+      unawaited(
+        _logEvent(
+          level: "error",
+          message: "Web speed test target URL is invalid",
+          details: <String, dynamic>{"engine": widget.engine.name},
+        ),
+      );
       return;
     }
+    unawaited(
+      _logEvent(
+        level: "info",
+        message: "Web speed test opened",
+        details: <String, dynamic>{
+          "engine": widget.engine.name,
+          "url": target.toString(),
+        },
+      ),
+    );
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel(
@@ -118,6 +154,16 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
       setState(() {
         _errorMessage = parsed.error ?? "Web測定でエラーが発生しました。";
       });
+      unawaited(
+        _logEvent(
+          level: "error",
+          message: "Web speed test bridge error",
+          details: <String, dynamic>{
+            "engine": widget.engine.name,
+            "error": parsed.error,
+          },
+        ),
+      );
       return;
     }
     if (parsed.type != "result") {
@@ -130,6 +176,17 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
       setState(() {
         _errorMessage = "測定結果を取得できませんでした。";
       });
+      unawaited(
+        _logEvent(
+          level: "error",
+          message: "Web speed test returned invalid result",
+          details: <String, dynamic>{
+            "engine": widget.engine.name,
+            "downloadMbps": download,
+            "uploadMbps": upload,
+          },
+        ),
+      );
       return;
     }
     _completed = true;
@@ -142,6 +199,13 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
       setState(() {
         _errorMessage = "オフラインのため結果を保存できません。";
       });
+      unawaited(
+        _logEvent(
+          level: "warning",
+          message: "Web speed test result could not be stored while offline",
+          details: <String, dynamic>{"engine": widget.engine.name},
+        ),
+      );
       return;
     }
     final SpeedTestResult result = SpeedTestResult(
@@ -155,6 +219,18 @@ class _WebSpeedTestScreenState extends ConsumerState<WebSpeedTestScreen> {
     );
     await ref.read(historyRepositoryProvider).save(result);
     await ref.read(historyControllerProvider.notifier).reload();
+    unawaited(
+      _logEvent(
+        level: "info",
+        message: "Web speed test completed",
+        details: <String, dynamic>{
+          "engine": widget.engine.name,
+          "downloadMbps": result.downloadMbps,
+          "uploadMbps": result.uploadMbps,
+          "serverInfo": result.serverInfo,
+        },
+      ),
+    );
     if (!mounted) {
       return;
     }

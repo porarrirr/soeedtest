@@ -5,6 +5,86 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val appProjectDir = projectDir
+val scriptsDir = rootProject.projectDir.parentFile.resolve("scripts")
+val cliAssetsDir = appProjectDir.resolve("src/main/assets/cli")
+val cliBundleDir = appProjectDir.resolve("src/main/cli-binaries")
+
+tasks.register("prepareCliAssets") {
+    group = "build setup"
+    description = "Prepare bundled Speedtest CLI binaries for Android assets."
+
+    doLast {
+        val hasDownloadUrl = !System.getenv("OOKLA_CLI_AARCH64_TGZ_URL").isNullOrBlank()
+        val isWindows = System.getProperty("os.name")
+            .lowercase()
+            .contains("windows")
+
+        if (hasDownloadUrl) {
+            val fetchScript = if (isWindows) {
+                scriptsDir.resolve("fetch_cli_binaries.ps1").absolutePath
+            } else {
+                scriptsDir.resolve("fetch_cli_binaries.sh").absolutePath
+            }
+            if (isWindows) {
+                exec {
+                    commandLine(
+                        "powershell",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        fetchScript,
+                    )
+                }
+            } else {
+                exec {
+                    commandLine("bash", fetchScript)
+                }
+            }
+        } else if (cliBundleDir.exists()) {
+            delete(cliAssetsDir)
+            copy {
+                from(cliBundleDir)
+                into(cliAssetsDir)
+                include("**/speedtest")
+            }
+            cliAssetsDir
+                .walkTopDown()
+                .filter { it.isFile && it.name == "speedtest" }
+                .forEach { it.setExecutable(true, true) }
+        } else {
+            logger.lifecycle(
+                "Speedtest CLI bundle not provided. " +
+                    "Set OOKLA_CLI_AARCH64_TGZ_URL or place binaries under " +
+                    "android/app/src/main/cli-binaries/<abi>/speedtest.",
+            )
+        }
+
+        val primaryBinary = cliAssetsDir.resolve("arm64-v8a/speedtest")
+        val allowMissingCli =
+            System.getenv("SPEEDTEST_ALLOW_MISSING_CLI")
+                ?.equals("true", ignoreCase = true) == true
+        if (primaryBinary.exists()) {
+            logger.lifecycle("Bundled Speedtest CLI: ${primaryBinary.absolutePath}")
+        } else {
+            val message =
+                "Speedtest CLI arm64 binary not bundled: ${primaryBinary.absolutePath}. " +
+                    "Set OOKLA_CLI_AARCH64_TGZ_URL or add " +
+                    "android/app/src/main/cli-binaries/arm64-v8a/speedtest."
+            if (allowMissingCli) {
+                logger.warn(message)
+            } else {
+                throw GradleException("$message To bypass, set SPEEDTEST_ALLOW_MISSING_CLI=true.")
+            }
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("prepareCliAssets")
+}
+
 android {
     namespace = "com.example.speedtest"
     compileSdk = flutter.compileSdkVersion
