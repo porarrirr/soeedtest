@@ -400,6 +400,20 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                     ),
                 )
             }
+
+            val nativeBinary = nativeLibraryBinary()
+            if (nativeBinary != null) {
+                return CliCommand(
+                    listOf(
+                        nativeBinary.absolutePath,
+                        "--accept-license",
+                        "--accept-gdpr",
+                        "--format=json",
+                        "--progress=no",
+                    ),
+                )
+            }
+
             val supportedAbis = Build.SUPPORTED_ABIS?.toList() ?: emptyList()
             for (abi in supportedAbis) {
                 val assetPath = when (abi) {
@@ -427,6 +441,27 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             )
         }
 
+        private fun nativeLibraryBinary(): File? {
+            val nativeLibDirPath = applicationInfo.nativeLibraryDir ?: return null
+            val candidate = File(nativeLibDirPath, "libspeedtest.so")
+            if (!candidate.exists()) {
+                return null
+            }
+            candidate.setExecutable(true, false)
+            if (!candidate.canExecute()) {
+                throw CliExecutionException(
+                    "binary_not_executable",
+                    "Bundled native CLI binary is not executable",
+                    mapOf(
+                        "path" to candidate.absolutePath,
+                        "nativeLibraryDir" to nativeLibDirPath,
+                        "supportedAbis" to (Build.SUPPORTED_ABIS?.toList() ?: emptyList<String>()),
+                    ),
+                )
+            }
+            return candidate
+        }
+
         private fun prepareEmbeddedBinary(assetPath: String, abi: String): File? {
             val outputDir = File(filesDir, "cli/$abi").apply { mkdirs() }
             val outputFile = File(outputDir, "speedtest")
@@ -445,6 +480,11 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
                 throw CliExecutionException(
                     "binary_not_executable",
                     "Extracted CLI binary cannot be executed ($abi)",
+                    mapOf(
+                        "path" to outputFile.absolutePath,
+                        "assetPath" to assetPath,
+                        "note" to "Device policy may block execution from app filesDir",
+                    ),
                 )
             }
             return outputFile

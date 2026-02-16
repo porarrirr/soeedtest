@@ -38,13 +38,14 @@ iOS / Android 対応の回線速度測定アプリです。
 
 ## Android CLI Binary Provisioning
 
-- `scripts/fetch_cli_binaries.sh` は Ookla CLI の Linux `.tgz` を展開し、`android/app/src/main/assets/cli/<abi>/speedtest` と `android/app/src/main/cli-binaries/<abi>/speedtest` に配置します。
+- `scripts/fetch_cli_binaries.sh` は Ookla CLI の Linux `.tgz` を展開し、`android/app/src/main/assets/cli/<abi>/speedtest`、`android/app/src/main/cli-binaries/<abi>/speedtest`、`android/app/src/main/jniLibs/<abi>/libspeedtest.so` に配置します。
 - 必須: `OOKLA_CLI_AARCH64_TGZ_URL`
 - 任意: `OOKLA_CLI_ARMHF_TGZ_URL`
 - 任意: `OOKLA_CLI_X86_64_TGZ_URL`
 - 任意: `OOKLA_CLI_X86_TGZ_URL`
 - iOS では Speedtest CLI は未対応です。
-- `android/app/src/main/cli-binaries/<abi>/speedtest` にバイナリを置くと、Androidビルド時に自動で `assets/cli` へコピーされ、APKへ同封されます。
+- `android/app/src/main/cli-binaries/<abi>/speedtest` にバイナリを置くと、Androidビルド時に自動で `assets/cli` と `jniLibs` へコピーされ、APKへ同封されます。
+- Android実行時は `nativeLibraryDir/libspeedtest.so` を優先実行します（`filesDir` 実行拒否端末対策）。
 - `arm64-v8a` バイナリがない場合、Androidビルドは失敗します（開発時のみ `SPEEDTEST_ALLOW_MISSING_CLI=true` で回避可能）。
 
 ## Local Commands

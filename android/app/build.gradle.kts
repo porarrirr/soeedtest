@@ -9,12 +9,39 @@ val appProjectDir = projectDir
 val scriptsDir = rootProject.projectDir.parentFile.resolve("scripts")
 val cliAssetsDir = appProjectDir.resolve("src/main/assets/cli")
 val cliBundleDir = appProjectDir.resolve("src/main/cli-binaries")
+val cliJniLibsDir = appProjectDir.resolve("src/main/jniLibs")
+val cliAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
 
 tasks.register("prepareCliAssets") {
     group = "build setup"
     description = "Prepare bundled Speedtest CLI binaries for Android assets."
 
     doLast {
+        fun syncCliOutputsFromBundle() {
+            delete(cliAssetsDir)
+            copy {
+                from(cliBundleDir)
+                into(cliAssetsDir)
+                include("**/speedtest")
+            }
+            cliAssetsDir
+                .walkTopDown()
+                .filter { it.isFile && it.name == "speedtest" }
+                .forEach { it.setExecutable(true, true) }
+
+            delete(cliJniLibsDir)
+            for (abi in cliAbis) {
+                val source = cliBundleDir.resolve("$abi/speedtest")
+                if (!source.exists()) {
+                    continue
+                }
+                val targetDir = cliJniLibsDir.resolve(abi).apply { mkdirs() }
+                val target = targetDir.resolve("libspeedtest.so")
+                source.copyTo(target, overwrite = true)
+                target.setExecutable(true, true)
+            }
+        }
+
         val hasDownloadUrl = !System.getenv("OOKLA_CLI_AARCH64_TGZ_URL").isNullOrBlank()
         val isWindows = System.getProperty("os.name")
             .lowercase()
@@ -42,17 +69,10 @@ tasks.register("prepareCliAssets") {
                     commandLine("bash", fetchScript)
                 }
             }
-        } else if (cliBundleDir.exists()) {
-            delete(cliAssetsDir)
-            copy {
-                from(cliBundleDir)
-                into(cliAssetsDir)
-                include("**/speedtest")
-            }
-            cliAssetsDir
-                .walkTopDown()
-                .filter { it.isFile && it.name == "speedtest" }
-                .forEach { it.setExecutable(true, true) }
+        }
+
+        if (cliBundleDir.exists()) {
+            syncCliOutputsFromBundle()
         } else {
             logger.lifecycle(
                 "Speedtest CLI bundle not provided. " +
@@ -62,11 +82,13 @@ tasks.register("prepareCliAssets") {
         }
 
         val primaryBinary = cliAssetsDir.resolve("arm64-v8a/speedtest")
+        val primaryNativeBinary = cliJniLibsDir.resolve("arm64-v8a/libspeedtest.so")
         val allowMissingCli =
             System.getenv("SPEEDTEST_ALLOW_MISSING_CLI")
                 ?.equals("true", ignoreCase = true) == true
-        if (primaryBinary.exists()) {
-            logger.lifecycle("Bundled Speedtest CLI: ${primaryBinary.absolutePath}")
+        if (primaryBinary.exists() && primaryNativeBinary.exists()) {
+            logger.lifecycle("Bundled Speedtest CLI asset: ${primaryBinary.absolutePath}")
+            logger.lifecycle("Bundled Speedtest CLI native lib: ${primaryNativeBinary.absolutePath}")
         } else {
             val message =
                 "Speedtest CLI arm64 binary not bundled: ${primaryBinary.absolutePath}. " +
